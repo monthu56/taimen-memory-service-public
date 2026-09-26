@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Статья — Memory Console{% endblock %}
+{% block content %}
+{% if source is none %}
+<h1>Статья не найдена</h1>
+<div class="panel err" role="alert">
+  В базе знаний «{{ ns }}» нет узла <span class="mono">{{ key }}</span>.
+  Возможно, статья принадлежит другой базе знаний или была удалена.
+</div>
+<p><a href="/console/articles?ns={{ ns | urlencode }}">← К списку статей</a></p>
+{% else %}
+<h1>{{ source.title or source.natural_key }}</h1>
+<p><a href="/console/articles?ns={{ ns | urlencode }}">← К списку статей</a></p>
+
+<dl class="kv">
+  <dt>Ключ</dt><dd class="mono">{{ source.natural_key }}</dd>
+  <dt>База знаний</dt><dd>{{ source.namespace }}</dd>
+  <dt>Тип</dt><dd>{{ source.type }}</dd>
+  <dt>Источник</dt><dd class="mono">{{ source.provenance.source or source.provenance.source_path or "—" }}</dd>
+  <dt>Происхождение</dt><dd>{{ source.provenance.origin }} (актор: {{ source.provenance.actor or "—" }})</dd>
+  <dt>Обновлено</dt><dd class="mono">{{ source.provenance.last_seen or "—" }}</dd>
+  <dt>Trace импорта</dt><dd class="mono">{{ source.provenance.trace_id or "—" }}</dd>
+  <dt>Чанков в индексе</dt><dd>{{ source.chunks }}</dd>
+  <dt>ПДн</dt><dd>{% if source.pii %}<span class="badge">ПДн{% if source.pii_categories %}: {{ source.pii_categories | join(", ") }}{% endif %}</span>{% else %}не помечена{% endif %}</dd>
+</dl>
+
+<h2>Оригинал
+  {% if source.content_source == "chunks" %}
+  <span class="muted">(восстановлен из фрагментов индекса — исходный текст не сохранялся)</span>
+  {% endif %}
+</h2>
+<pre class="content">{{ source.content }}</pre>
+
+<div class="danger-zone">
+  <h2>Удаление</h2>
+  <p>Удаление безвозвратно: статья исчезнет из графа и поискового индекса этой базы
+     знаний. Акт удаления фиксируется в аудите со снапшотом.</p>
+  <form method="post" action="/console/articles/delete">
+    <input type="hidden" name="key" value="{{ source.natural_key }}">
+    <input type="hidden" name="ns" value="{{ ns }}">
+    <p><label><input type="checkbox" name="confirm" value="yes" required>
+      Подтверждаю безвозвратное удаление «{{ source.title or source.natural_key }}»</label></p>
+    <button type="submit" class="action">Удалить статью</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

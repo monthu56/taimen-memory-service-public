@@ -1,0 +1,87 @@
+[project]
+name = "platform-memory"
+version = "0.1.0"
+description = "Product-neutral memory engine (typed knowledge graph + vector retrieval over Apache AGE + pgvector). Apache-2.0 — see LICENSE and THIRD_PARTY.md."
+requires-python = ">=3.12"
+# Own licence (Apache-2.0). Isolation invariant: this package stays licence- and
+# dependency-isolated so it builds, tests and runs as a standalone repository.
+license = { text = "Apache-2.0" }
+authors = [{ name = "Aleksandr Pereboev" }]
+keywords = ["knowledge-graph", "rag", "apache-age", "pgvector", "retrieval", "memory"]
+# ISOLATION INVARIANT: no `platform-*` deps here, no infrastructure of other platform
+# services. Own config (CB_*, pydantic-settings), own DB driver (psycopg3 + AGE + pgvector),
+# own LLM/embeddings layer (openai directly).
+# The ONE deliberate exception (ADR-018; superproject ADR-0013/0030): `platform-auth-sdk`,
+# the shared enforcement SDK (separate repository, Apache-2.0) every resource service uses
+# to verify IAM access tokens. It is confined to `server/iam.py` (HTTP edge); the memory
+# engine itself never imports it and keeps working with static key grants (ADR-017).
+dependencies = [
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "psycopg[binary]>=3.1,<4",
+    "pgvector>=0.3,<1",
+    "pyyaml>=6,<7",
+    "openai>=1.30,<2",
+    "networkx>=3,<4",
+    "rapidfuzz>=3,<4",
+    "numpy>=1.26",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "typer>=0.12,<1",
+    # Memory Console (server-rendered админ-интерфейс /console)
+    "jinja2>=3.1,<4",
+    "python-multipart>=0.0.9,<1",
+    # IAM access tokens on the HTTP edge (ADR-018): path dependency, see [tool.uv.sources].
+    "platform-auth-sdk",
+]
+
+[project.optional-dependencies]
+# Leiden gives better community quality; without it -> Louvain fallback (networkx).
+# graspologic pulls a heavy scientific stack (scipy/sklearn) -> kept opt-in.
+leiden = ["graspologic>=3"]
+# MCP graph server (stdio + streamable HTTP); vendored from graphify.
+mcp = ["mcp>=1.2", "starlette>=0.37"]
+
+[project.scripts]
+# Primary entry points. Transitional `cb*` aliases preserve muscle memory during migration.
+platform-memory-serve = "platform_memory.server.app:main"
+platform-memory-mcp = "platform_memory.mcp.server:main"
+cb = "platform_memory.cli.main:app"
+cb-serve = "platform_memory.server.app:main"
+cb-mcp = "platform_memory.mcp.server:main"
+
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/platform_memory"]
+
+[tool.uv.sources]
+# Общий enforcement SDK — соседний репозиторий суперпроекта (ADR-0013/0030): поэтому
+# контекст docker build — корень суперпроекта, а не каталог сервиса (см. Dockerfile).
+platform-auth-sdk = { path = "../platform-auth-sdk", editable = true }
+# Клиент сервиса (client/) — отдельный дистрибутив; сервису он нужен только для
+# тестов клиента (tests/client), потребители подключают ../memory-service/client.
+platform-memory-client = { path = "client", editable = true }
+
+# Dev-инструменты ставятся `uv sync` (группа dev включена по умолчанию) — тесты и линт
+# воспроизводимы одной командой, без ручной установки в venv.
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    "ruff>=0.15,<1",
+    "httpx>=0.27,<1",   # TestClient (starlette) требует httpx как test-транспорт
+    "platform-memory-client",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: юнит-тесты без внешних сервисов (БД не требуется)",
+    "integration: тесты на реальной БД (AGE+pgvector); скипаются без CB_TEST_DATABASE_URL",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

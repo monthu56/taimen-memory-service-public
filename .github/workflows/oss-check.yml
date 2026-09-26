@@ -1,0 +1,40 @@
+name: oss-check
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # TAI-ADR-0043: the trunk must stay publishable. Same tool as the release
+  # (tools/oss_check.py in the umbrella); private stop-list patterns come from a
+  # secret and are never committed.
+  oss-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch oss-check from the umbrella
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.OSS_CHECK_REPO || 'monthu56/taimen' }}
+          # Read-only deploy key of the umbrella while it is private; empty after
+          # the public release, then the default token is enough.
+          ssh-key: ${{ secrets.TAIMEN_UMBRELLA_DEPLOY_KEY }}
+          path: .oss-check
+          sparse-checkout: tools/oss_check.py
+          sparse-checkout-cone-mode: false
+      - name: Install gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+      - name: oss-check
+        env:
+          OSS_CHECK_STOPLIST: ${{ secrets.OSS_CHECK_STOPLIST }}
+        run: python3 .oss-check/tools/oss_check.py . --ref HEAD

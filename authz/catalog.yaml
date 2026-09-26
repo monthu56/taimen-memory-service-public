@@ -1,0 +1,35 @@
+# Каталог действий memory-service для policy-service (TAI-ADR-0025/0031,
+# дизайн v0 §11). Namespace памяти — объект memory_namespace: для воркспейса
+# верхнего уровня (scope → workspace), для principal (owner) и общий namespace
+# tenant (tenant → tenant). Идентификатор объекта — UUID воркспейса,
+# principal или tenant; имя namespace в memory-service выводится из него.
+service: memory-service
+version: 1
+
+resource_types:
+  memory_namespace:
+    scope: workspace
+    tenant: true
+    relations: [owner]
+
+actions:
+  memory.read:
+    resources:
+      workspace: null
+      memory_namespace: "owner or memory.read@scope or memory.read@tenant"
+  memory.write:
+    resources:
+      workspace: null
+      memory_namespace: "owner or memory.write@scope or memory.write@tenant"
+  memory.pii:
+    resources:
+      workspace: null
+      memory_namespace: "memory.pii@scope or memory.pii@tenant"
+  memory.admin:
+    resources:
+      workspace: null
+      memory_namespace: "memory.admin@scope or memory.admin@tenant"
+  observations.write:
+    resources:
+      workspace: null
+      memory_namespace: "owner or observations.write@scope or observations.write@tenant"

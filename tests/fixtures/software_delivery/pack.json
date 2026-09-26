@@ -1,0 +1,117 @@
+{
+  "name": "software-delivery",
+  "version": 1,
+  "kinds": [
+    {
+      "kind": "component",
+      "naturalKey": "<repo>"
+    },
+    {
+      "kind": "source_file",
+      "naturalKey": "<repo>:<path>",
+      "idPatterns": [
+        "(?:src|tests|client)/[\\w./-]+\\.(?:py|ts|tsx)"
+      ]
+    },
+    {
+      "kind": "endpoint",
+      "naturalKey": "<METHOD> <path с параметрами как {}>",
+      "aliases": [
+        "<path с исходными именами параметров>"
+      ],
+      "idPatterns": [
+        "\\b(?:GET|POST|PUT|PATCH|DELETE)\\s+/[\\w{}./:-]+",
+        "(?<![\\w.])/(?:api|iam|platform|scim)/[\\w{}./:-]+",
+        "(?<![\\w.])/(?:tasks|runs|approvals|artifacts|claims|sessions|events|skills|principals|workspaces|projects|work|harness|observations|context|task-types)(?:/[\\w{}.:-]+)*"
+      ]
+    },
+    {
+      "kind": "client_method",
+      "naturalKey": "<repo>:<module>.<Class>.<method>"
+    },
+    {
+      "kind": "ui_call",
+      "naturalKey": "<repo>:<path>:<line>"
+    },
+    {
+      "kind": "event",
+      "naturalKey": "<event_type>",
+      "idPatterns": [
+        "\\b[a-z_]+\\.(?:[a-z_]+)(?:\\.[a-z_]+)?\\b"
+      ]
+    },
+    {
+      "kind": "table",
+      "naturalKey": "<repo>:<table>"
+    },
+    {
+      "kind": "adr",
+      "naturalKey": "<SERIES>-<number>",
+      "aliases": [
+        "ADR-<number>",
+        "<SERIES>-ADR-<number>"
+      ],
+      "idPatterns": [
+        "\\b(?:TAI|CP|PC|MEM)-(?:ADR-)?\\d{3,4}\\b",
+        "\\bADR-\\d{3,4}\\b"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "relation": "defined_in",
+      "fromKinds": [
+        "endpoint",
+        "client_method",
+        "ui_call",
+        "event",
+        "table"
+      ],
+      "toKinds": [
+        "source_file"
+      ],
+      "temporal": true
+    },
+    {
+      "relation": "part_of",
+      "fromKinds": [
+        "source_file"
+      ],
+      "toKinds": [
+        "component"
+      ],
+      "temporal": true
+    },
+    {
+      "relation": "calls",
+      "fromKinds": [
+        "client_method",
+        "ui_call"
+      ],
+      "toKinds": [
+        "endpoint"
+      ],
+      "temporal": true
+    },
+    {
+      "relation": "emits",
+      "fromKinds": [
+        "source_file"
+      ],
+      "toKinds": [
+        "event"
+      ],
+      "temporal": true
+    },
+    {
+      "relation": "governs",
+      "fromKinds": [
+        "adr"
+      ],
+      "toKinds": [
+        "source_file"
+      ],
+      "temporal": true
+    }
+  ]
+}

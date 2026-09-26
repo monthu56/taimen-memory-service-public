@@ -1,0 +1,372 @@
+{
+  "pack": "software-delivery@1",
+  "source": "git:control-plane",
+  "scope": "control-plane",
+  "snapshotId": "control-plane@f6023272c0ffee00000000000000000000000001",
+  "observedAt": "2026-09-23T08:45:00+00:00",
+  "entities": [
+    {
+      "kind": "adr",
+      "key": "CP-0007",
+      "attributes": {
+        "status": "Accepted"
+      },
+      "title": "Чекпойнты прогона",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "docs/decisions/CP-0007-run-checkpoints.md",
+        "line": 1
+      }
+    },
+    {
+      "kind": "client_method",
+      "key": "control-plane:client.ControlPlaneClient.create_checkpoint",
+      "attributes": {},
+      "title": "client.ControlPlaneClient.create_checkpoint",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "client/src/control_plane_client/client.py",
+        "line": 322
+      }
+    },
+    {
+      "kind": "client_method",
+      "key": "control-plane:client.ControlPlaneClient.list_checkpoints",
+      "attributes": {},
+      "title": "client.ControlPlaneClient.list_checkpoints",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "client/src/control_plane_client/client.py",
+        "line": 310
+      }
+    },
+    {
+      "kind": "component",
+      "key": "control-plane",
+      "attributes": {}
+    },
+    {
+      "kind": "endpoint",
+      "key": "GET /api/v1/runs/{}",
+      "attributes": {
+        "path": "/api/v1/runs/{run_id}",
+        "method": "GET"
+      },
+      "title": "GET /api/v1/runs/{}",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/api/v1/runs.py",
+        "line": 88
+      }
+    },
+    {
+      "kind": "endpoint",
+      "key": "GET /api/v1/runs/{}/checkpoints",
+      "attributes": {
+        "path": "/api/v1/runs/{run_id}/checkpoints",
+        "method": "GET"
+      },
+      "title": "GET /api/v1/runs/{}/checkpoints",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/api/v1/runs.py",
+        "line": 199
+      }
+    },
+    {
+      "kind": "endpoint",
+      "key": "GET /api/v1/tasks",
+      "attributes": {
+        "path": "/api/v1/tasks",
+        "method": "GET"
+      },
+      "title": "GET /api/v1/tasks",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/api/v1/tasks.py",
+        "line": 41
+      }
+    },
+    {
+      "kind": "endpoint",
+      "key": "POST /api/v1/runs/{}/checkpoints",
+      "attributes": {
+        "path": "/api/v1/runs/{run_id}/checkpoints",
+        "method": "POST"
+      },
+      "title": "POST /api/v1/runs/{}/checkpoints",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/api/v1/runs.py",
+        "line": 221
+      }
+    },
+    {
+      "kind": "event",
+      "key": "run.checkpoint_created",
+      "attributes": {},
+      "title": "run.checkpoint_created",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/application/runs/service.py",
+        "line": 140
+      }
+    },
+    {
+      "kind": "event",
+      "key": "run.completed",
+      "attributes": {},
+      "title": "run.completed",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/application/runs/service.py",
+        "line": 201
+      }
+    },
+    {
+      "kind": "source_file",
+      "key": "control-plane:client/src/control_plane_client/client.py",
+      "attributes": {
+        "path": "client/src/control_plane_client/client.py"
+      }
+    },
+    {
+      "kind": "source_file",
+      "key": "control-plane:src/control_plane/api/v1/runs.py",
+      "attributes": {
+        "path": "src/control_plane/api/v1/runs.py"
+      }
+    },
+    {
+      "kind": "source_file",
+      "key": "control-plane:src/control_plane/api/v1/tasks.py",
+      "attributes": {
+        "path": "src/control_plane/api/v1/tasks.py"
+      }
+    },
+    {
+      "kind": "source_file",
+      "key": "control-plane:src/control_plane/application/runs/service.py",
+      "attributes": {
+        "path": "src/control_plane/application/runs/service.py"
+      }
+    },
+    {
+      "kind": "source_file",
+      "key": "control-plane:src/control_plane/infrastructure/db/models.py",
+      "attributes": {
+        "path": "src/control_plane/infrastructure/db/models.py"
+      }
+    },
+    {
+      "kind": "table",
+      "key": "control-plane:runs",
+      "attributes": {},
+      "title": "runs",
+      "provenance": {
+        "repo": "control-plane",
+        "sha": "f6023272c0ffee00000000000000000000000001",
+        "path": "src/control_plane/infrastructure/db/models.py",
+        "line": 57
+      }
+    }
+  ],
+  "relations": [
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/runs.py"
+      },
+      "to": {
+        "kind": "component",
+        "key": "control-plane"
+      }
+    },
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/tasks.py"
+      },
+      "to": {
+        "kind": "component",
+        "key": "control-plane"
+      }
+    },
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:client/src/control_plane_client/client.py"
+      },
+      "to": {
+        "kind": "component",
+        "key": "control-plane"
+      }
+    },
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/application/runs/service.py"
+      },
+      "to": {
+        "kind": "component",
+        "key": "control-plane"
+      }
+    },
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/infrastructure/db/models.py"
+      },
+      "to": {
+        "kind": "component",
+        "key": "control-plane"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/runs/{}/checkpoints"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/runs.py"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "endpoint",
+        "key": "POST /api/v1/runs/{}/checkpoints"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/runs.py"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/runs/{}"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/runs.py"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/tasks"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/tasks.py"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "client_method",
+        "key": "control-plane:client.ControlPlaneClient.list_checkpoints"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:client/src/control_plane_client/client.py"
+      }
+    },
+    {
+      "relation": "calls",
+      "from": {
+        "kind": "client_method",
+        "key": "control-plane:client.ControlPlaneClient.list_checkpoints"
+      },
+      "to": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/runs/{}/checkpoints"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "client_method",
+        "key": "control-plane:client.ControlPlaneClient.create_checkpoint"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:client/src/control_plane_client/client.py"
+      }
+    },
+    {
+      "relation": "calls",
+      "from": {
+        "kind": "client_method",
+        "key": "control-plane:client.ControlPlaneClient.create_checkpoint"
+      },
+      "to": {
+        "kind": "endpoint",
+        "key": "POST /api/v1/runs/{}/checkpoints"
+      }
+    },
+    {
+      "relation": "emits",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/application/runs/service.py"
+      },
+      "to": {
+        "kind": "event",
+        "key": "run.checkpoint_created"
+      }
+    },
+    {
+      "relation": "emits",
+      "from": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/application/runs/service.py"
+      },
+      "to": {
+        "kind": "event",
+        "key": "run.completed"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "table",
+        "key": "control-plane:runs"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/infrastructure/db/models.py"
+      }
+    },
+    {
+      "relation": "governs",
+      "from": {
+        "kind": "adr",
+        "key": "CP-0007"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "control-plane:src/control_plane/api/v1/runs.py"
+      }
+    }
+  ]
+}

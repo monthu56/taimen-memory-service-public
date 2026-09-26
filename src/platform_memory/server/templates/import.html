@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Импорт — Memory Console{% endblock %}
+{% block content %}
+<h1>Импорт статьи — база знаний «{{ ns }}»</h1>
+
+{% if error %}
+<div class="panel err" role="alert">{{ error }}</div>
+{% endif %}
+
+<form class="stack" method="post" action="/console/import">
+  <input type="hidden" name="ns" value="{{ ns }}">
+  <label>Текст статьи
+    <span class="hint">Сырой текст со страницы (Ctrl-A, Ctrl-C) — разметка не нужна,
+      оригинал сохраняется целиком и показывается как источник.</span>
+    <textarea name="content" required>{{ form.content or "" }}</textarea>
+  </label>
+  <label>Название
+    <span class="hint">Пусто — возьмётся первая строка текста.</span>
+    <input type="text" name="title" value="{{ form.title or '' }}">
+  </label>
+  <label>External ID
+    <span class="hint">Рекомендуется URL статьи: повторный импорт с тем же ID обновит
+      её же, а не создаст дубль.</span>
+    <input type="text" name="external_id" value="{{ form.external_id or '' }}" placeholder="https://…">
+  </label>
+  <label>Источник
+    <span class="hint">Откуда взят текст (домен, система). Пусто — «console».</span>
+    <input type="text" name="source" value="{{ form.source or '' }}" placeholder="mos.ru">
+  </label>
+  <div><button type="submit" class="action">Импортировать в «{{ ns }}»</button></div>
+</form>
+{% endblock %}

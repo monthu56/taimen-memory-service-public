@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ brand_name }} — verifiable corporate memory</title>
+<meta name="description" content="{{ brand_tagline }}">
+<meta name="robots" content="noindex">
+<style>
+  :root {
+    --bg: #0e1116; --bg-2: #12161c; --panel: #171d26; --panel-2: #1c2430;
+    --border: #2a3542; --border-2: #364252;
+    --text: #e6edf3; --muted: #9aa7b4; --faint: #6b7684;
+    --amber: #f5a623; --amber-2: #ffbe4d; --amber-ink: #1a1204;
+    --green: #3fb950; --link: #7cc4ff;
+    --shadow: 0 12px 40px rgba(0,0,0,.45);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: radial-gradient(1200px 600px at 70% -10%, #18202b 0%, var(--bg) 55%) fixed;
+    color: var(--text); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
+
+  /* header */
+  header.top {
+    position: sticky; top: 0; z-index: 20; backdrop-filter: blur(8px);
+    background: rgba(14,17,22,.82); border-bottom: 1px solid var(--border);
+  }
+  .top .wrap { display: flex; align-items: center; gap: 16px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .2px; }
+  .brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 12px var(--amber); }
+  .top nav { margin-left: auto; display: flex; align-items: center; gap: 20px; }
+  .top nav a { color: var(--muted); font-size: 14px; }
+  .top nav a:hover { color: var(--text); text-decoration: none; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600;
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border-2); color: var(--muted);
+  }
+  .badge .led { width: 8px; height: 8px; border-radius: 50%; }
+  .badge.live .led { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .badge.canned .led { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+  /* hero */
+  .hero { padding: 56px 0 20px; }
+  .hero h1 { font-size: 40px; line-height: 1.12; margin: 0 0 14px; letter-spacing: -.5px; max-width: 18ch; }
+  .hero h1 .accent { color: var(--amber); }
+  .hero p.sub { font-size: 18px; color: var(--muted); margin: 0 0 28px; max-width: 62ch; }
+
+  /* search */
+  .searchbar { display: flex; gap: 10px; max-width: 720px; }
+  .searchbar .field { position: relative; flex: 1; }
+  .searchbar input[type=search] {
+    width: 100%; height: 54px; padding: 0 16px; font-size: 17px; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius);
+  }
+  .searchbar input[type=search]::placeholder { color: var(--faint); }
+  .searchbar input[type=search]:focus { border-color: var(--amber); }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 54px; padding: 0 22px; font-size: 16px; font-weight: 700; cursor: pointer;
+    background: var(--amber); color: var(--amber-ink); border: 1px solid var(--amber);
+    border-radius: var(--radius); white-space: nowrap;
+  }
+  .btn:hover { background: var(--amber-2); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.ghost { background: transparent; color: var(--text); border-color: var(--border-2); }
+  .btn.ghost:hover { background: var(--panel-2); }
+
+  .chips { margin: 16px 0 0; display: flex; flex-wrap: wrap; gap: 8px; }
+  .chips .lbl { color: var(--faint); font-size: 13px; align-self: center; margin-right: 4px; }
+  .chip {
+    font-size: 13px; color: var(--muted); background: var(--panel); border: 1px solid var(--border);
+    padding: 6px 11px; border-radius: 999px; cursor: pointer;
+  }
+  .chip:hover { color: var(--text); border-color: var(--border-2); background: var(--panel-2); }
+
+  /* use-case scenarios (3×3) */
+  .sc-lead { color: var(--muted); font-size: 14px; margin: 22px 0 12px; }
+  .scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .scenario-card { text-align: left; background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 14px 15px; cursor: pointer; transition: border-color .15s, background .15s;
+    display: flex; flex-direction: column; gap: 4px; }
+  .scenario-card:hover { border-color: var(--amber-2); background: var(--panel-2); }
+  .scenario-card .kick { font-size: 11px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--amber-2); }
+  .scenario-card .ttl { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.3; }
+  .scenario-card .n { font-size: 12px; color: var(--faint); margin-top: 2px; }
+  /* active scenario bar */
+  .scenario-bar { margin: 18px 0 4px; padding: 12px 14px; background: linear-gradient(120deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--amber); border-radius: var(--radius); }
+  .scenario-bar .sc-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .scenario-bar .sc-kick { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--amber-ink); background: var(--amber); padding: 3px 8px; border-radius: 6px; }
+  .scenario-bar .sc-title { font-weight: 700; font-size: 15px; }
+  .scenario-bar .sc-exit { all: unset; cursor: pointer; margin-left: auto; color: var(--muted); font-size: 13px;
+    padding: 4px 10px; border: 1px solid var(--border-2); border-radius: 999px; }
+  .scenario-bar .sc-exit:hover { color: var(--amber-2); border-color: var(--amber-2); }
+  .scenario-bar .sc-steps { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .scenario-bar .sc-step { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted);
+    cursor: pointer; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; }
+  .scenario-bar .sc-step .num { width: 16px; height: 16px; border-radius: 50%; background: var(--border-2);
+    color: var(--text); font-size: 10px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .scenario-bar .sc-step.done .num { background: var(--faint); }
+  .scenario-bar .sc-step.on { color: var(--amber-2); border-color: var(--amber-2); }
+  .scenario-bar .sc-step.on .num { background: var(--amber); color: var(--amber-ink); }
+  .scenario-bar .sc-nav { margin-left: auto; display: inline-flex; gap: 8px; }
+  .scenario-bar .sc-nav button { all: unset; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text);
+    padding: 5px 12px; border: 1px solid var(--border-2); border-radius: 999px; }
+  .scenario-bar .sc-nav button:hover { border-color: var(--amber-2); color: var(--amber-2); }
+  .scenario-bar .sc-nav button:disabled { opacity: .35; cursor: default; }
+  .scenario-bar .sc-nav .sc-play { background: var(--amber); color: var(--amber-ink); border-color: var(--amber); font-weight: 700; }
+  .scenario-bar .sc-nav .sc-play:hover { background: var(--amber-2); border-color: var(--amber-2); color: var(--amber-ink); }
+  .scenario-bar .sc-step.sc-final .num { background: transparent; border: 1px solid var(--amber-2); color: var(--amber-2); }
+
+  /* search pipeline — visual animated stepper: the query flowing through the engine */
+  .pipe-trace { margin: 14px 0 8px; }
+  .pipe-trace[hidden] { display: none; }
+  .pl-lead { font-size: 12.5px; color: var(--muted); margin-bottom: 9px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .pl-rt { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--amber-2);
+    background: rgba(245,166,35,.10); border: 1px solid var(--amber); border-radius: 999px; padding: 2px 10px; font-size: 11.5px;
+    font-variant-numeric: tabular-nums; }
+  .pl-rt .spark { color: var(--amber); }
+  .pl-flow { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+  .pl-stage { flex: 1 1 0; min-width: 150px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px;
+    opacity: 0; transform: translateY(7px); animation: plIn .42s ease forwards; }
+  .pl-stage .pl-top { display: flex; align-items: baseline; gap: 8px; }
+  .pl-stage .pl-count { font-variant-numeric: tabular-nums; font-weight: 800; font-size: 21px; color: var(--amber-2); line-height: 1; }
+  .pl-stage .pl-name { font-size: 13px; font-weight: 700; color: var(--text); }
+  .pl-stage .pl-unit { font-size: 11px; color: var(--faint); }
+  .pl-stage .pl-detail { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .pl-stage .pl-badge { margin-top: 7px; align-self: flex-start; font-size: 11px; font-weight: 700;
+    color: var(--amber-ink); background: var(--amber); border-radius: 6px; padding: 2px 8px; }
+  .pl-stage .pl-badge.muted { color: var(--muted); background: transparent; border: 1px solid var(--border-2); font-weight: 600; }
+  .pl-arrow { align-self: center; color: var(--border-2); font-size: 15px; opacity: 0; animation: plIn .42s ease forwards; }
+  @keyframes plIn { to { opacity: 1; transform: none; } }
+  @media (max-width: 720px) { .pl-arrow { display: none; } .pl-stage { min-width: 0; flex-basis: calc(50% - 6px); } }
+
+  /* final answer (scenario) */
+  .final-answer { background: linear-gradient(120deg, var(--panel-2), var(--panel)); border: 1px solid var(--amber);
+    border-radius: var(--radius); padding: 16px 18px; margin: 6px 0 16px; }
+  .final-answer .fa-head { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+  .final-answer .fa-badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--amber-ink); background: var(--amber); padding: 3px 8px; border-radius: 6px; margin-right: 8px; }
+  .final-answer .fa-body { color: var(--text); font-size: 15px; line-height: 1.6; }
+  /* minimal markdown rendering of the model's answer */
+  .final-answer .fa-body p { margin: 0 0 10px; }
+  .final-answer .fa-body > :last-child { margin-bottom: 0; }
+  .final-answer .fa-body ul, .final-answer .fa-body ol { margin: 6px 0 10px; padding-left: 22px; }
+  .final-answer .fa-body li { margin: 3px 0; }
+  .final-answer .fa-body code { background: var(--bg-2); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #d7dee6; }
+  .final-answer .fa-body strong { color: var(--text); font-weight: 700; }
+  .final-answer .fa-body em { font-style: italic; }
+  .final-answer .fa-body .fa-h { font-weight: 700; color: var(--amber-2); margin: 2px 0 6px; }
+  .final-answer .fa-rt { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--amber-2);
+    background: rgba(245,166,35,.10); border: 1px solid var(--amber); border-radius: 999px; padding: 1px 9px;
+    font-size: 11px; font-variant-numeric: tabular-nums; margin-left: 8px; }
+  .final-answer .fa-srcs { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .final-answer .fa-lbl { font-size: 12px; color: var(--faint); }
+  .final-answer .fa-src { all: unset; cursor: pointer; font-size: 12px; color: var(--link);
+    padding: 3px 9px; border: 1px solid var(--border-2); border-radius: 999px; overflow-wrap: anywhere; }
+  .final-answer .fa-src:hover { border-color: var(--amber-2); color: var(--amber-2); }
+  .final-answer .fa-note { font-size: 12px; color: var(--faint); margin-top: 12px; }
+
+  /* results */
+  .results { padding: 8px 0 36px; }
+  .results .meta { color: var(--muted); font-size: 14px; margin: 18px 0 12px; min-height: 20px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 18px 16px; margin-bottom: 14px; box-shadow: 0 1px 0 rgba(255,255,255,.02) inset;
+  }
+  .card:hover { border-color: var(--border-2); }
+  .card .rowtop { display: flex; align-items: flex-start; gap: 14px; }
+  .card h3 { margin: 0; font-size: 18px; line-height: 1.3; flex: 1; }
+  .card h3 button {
+    all: unset; cursor: pointer; color: var(--text); font-weight: 700;
+  }
+  .card h3 button:hover { color: var(--amber-2); }
+  .score { flex: none; text-align: right; min-width: 118px; }
+  .score .num { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 14px; color: var(--amber-2); }
+  .score .bar { height: 6px; margin-top: 5px; background: var(--border); border-radius: 999px; overflow: hidden; }
+  .score .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--amber), var(--amber-2)); }
+  .score .cap { font-size: 11px; color: var(--faint); margin-top: 4px; letter-spacing: .3px; }
+  .card .heading { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
+  .card .snippet { color: #cdd6df; font-size: 15px; margin: 0 0 12px; }
+  .card .src { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--faint); flex-wrap: wrap; }
+  .card .src .u { color: var(--link); overflow-wrap: anywhere; }
+  .card .src .srcbtn { all: unset; cursor: pointer; color: var(--link); overflow-wrap: anywhere;
+    word-break: break-all; font-size: 13px; }
+  .card .src .srcbtn:hover { color: var(--amber-2); text-decoration: underline; }
+  .card .src .view { margin-left: auto; }
+  .card .src .view button {
+    all: unset; cursor: pointer; color: var(--amber-2); font-weight: 600; font-size: 13px;
+  }
+  .card .src .view button:hover { text-decoration: underline; }
+
+  .empty, .errbox { color: var(--muted); background: var(--panel); border: 1px dashed var(--border-2);
+    border-radius: var(--radius); padding: 22px; text-align: center; }
+  .errbox { border-color: #6e3b3b; color: #f0b4b4; }
+
+  /* knowledge graph panel */
+  .graph-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 16px 12px; margin: 4px 0 18px; }
+  .graph-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .graph-head .gtitle { font-weight: 700; font-size: 14px; }
+  .graph-head .glegend { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); margin-left: auto; }
+  .graph-head .glegend .k { width: 10px; height: 10px; display: inline-block; margin: 0 3px 0 10px; border-radius: 50%; }
+  .graph-head .glegend .k.match { background: #3a2a08; box-shadow: 0 0 0 2px var(--amber); }
+  .graph-head .glegend .k.person { background: #4ec9b0; }
+  .graph-head .glegend .k.decision { background: #c586c0; }
+  .graph-head .glegend .k.project { background: #e8a44c; }
+  .graph-head .glegend .k.doc { background: #6ca6ff; }
+  .graph-head .glegend .k.concept { background: #ffbe4d; }
+  .graph-wrap { width: 100%; overflow-x: auto; margin-top: 8px; }
+  #graph-svg { width: 100%; min-width: 640px; height: auto; display: block; }
+  .graph-note { font-size: 12px; color: var(--faint); margin-top: 8px; }
+  /* force-cloud graph */
+  .cedge { stroke: #2b3542; stroke-width: 1.2; opacity: 0; transition: opacity .5s ease, stroke .45s ease, stroke-width .3s; }
+  .cedge.on { opacity: .5; }
+  .cedge.pulse { stroke: #f5a623; opacity: .95; stroke-width: 1.8; }
+  .cnode { opacity: 0; transition: opacity .55s ease; }
+  .cnode.on { opacity: 1; }
+  .cnode.clickable { cursor: pointer; }
+  .cnode.clickable:hover .cdot { stroke: #fff; stroke-width: 2; }
+  .cnode.pulse .cdot { animation: cglow 1s ease-out; }
+  .cnode.finalpulse .cdot { animation: cglow 1.2s ease-out infinite; }
+  .clabel { pointer-events: none; }
+  .clabel.lbl-hover { opacity: 0; transition: opacity .15s ease; }
+  .cnode:hover .clabel.lbl-hover { opacity: 1; }
+  @keyframes cglow { 0% { filter: none; } 35% { filter: drop-shadow(0 0 7px #f5a623); } 100% { filter: none; } }
+  /* step-through animation of the retrieval pipeline on the graph */
+  .graph-steps { display: flex; align-items: center; gap: 12px; margin-top: 8px;
+    padding: 8px 12px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; }
+  .graph-caption { font-size: 13px; color: var(--amber-2); font-weight: 600; min-height: 18px; flex: 1; }
+  .graph-ctrl { display: flex; align-items: center; gap: 10px; }
+  .graph-dots { display: inline-flex; gap: 6px; align-items: center; }
+  .graph-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--border-2); display: inline-block;
+    transition: background .3s, transform .2s; cursor: pointer; }
+  .graph-dots i:hover { transform: scale(1.3); }
+  .graph-dots i.done { background: var(--faint); }
+  .graph-dots i.on { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .stepbtn { all: unset; cursor: pointer; color: var(--muted); font-size: 11px; line-height: 1;
+    padding: 5px 9px; border: 1px solid var(--border-2); border-radius: 8px; }
+  .stepbtn:hover { color: var(--amber-2); border-color: var(--amber-2); }
+  .stepbtn:disabled { opacity: .35; cursor: default; }
+  .replaybtn { all: unset; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text);
+    padding: 5px 11px; border: 1px solid var(--border-2); border-radius: 999px; }
+  .replaybtn:hover { background: var(--panel); border-color: var(--amber-2); color: var(--amber-2); }
+  .cconf { opacity: 0; transition: opacity .4s ease; }
+  .cconf.on { opacity: 1; }
+
+  /* how it works */
+  section.how { border-top: 1px solid var(--border); padding: 48px 0; }
+  .how h2, .cta h2 { font-size: 26px; margin: 0 0 8px; }
+  .how p.lead { color: var(--muted); margin: 0 0 28px; max-width: 66ch; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .step { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .step .n { display: inline-flex; width: 30px; height: 30px; align-items: center; justify-content: center;
+    border-radius: 8px; background: var(--panel-2); border: 1px solid var(--border-2); color: var(--amber-2);
+    font-weight: 700; margin-bottom: 12px; }
+  .step h4 { margin: 0 0 6px; font-size: 16px; }
+  .step p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  /* cta */
+  section.cta { border-top: 1px solid var(--border); padding: 48px 0 56px; }
+  .cta .box { background: linear-gradient(120deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border-2); border-radius: 16px; padding: 32px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+  .cta .box .txt { flex: 1; min-width: 280px; }
+  .cta .box p { color: var(--muted); margin: 6px 0 0; }
+
+  footer { border-top: 1px solid var(--border); padding: 26px 0 40px; color: var(--faint); font-size: 13px; }
+  footer .wrap { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  footer .sample { display: inline-flex; align-items: center; gap: 7px; }
+  footer .sample .led { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+
+  /* modal / source view */
+  .overlay { position: fixed; inset: 0; z-index: 40; background: rgba(6,8,11,.66); backdrop-filter: blur(3px);
+    display: none; align-items: flex-start; justify-content: center; padding: 48px 20px; overflow: auto; }
+  .overlay.open { display: flex; }
+  .sheet { width: 100%; max-width: 820px; background: var(--bg-2); border: 1px solid var(--border-2);
+    border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+  .sheet header { display: flex; align-items: flex-start; gap: 16px; padding: 20px 22px; border-bottom: 1px solid var(--border); }
+  .sheet header h3 { margin: 0; font-size: 20px; flex: 1; line-height: 1.3; }
+  .sheet .close { all: unset; cursor: pointer; color: var(--muted); font-size: 22px; line-height: 1; padding: 4px 8px; border-radius: 8px; }
+  .sheet .close:hover { color: var(--text); background: var(--panel-2); }
+  .prov { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 14px 22px; background: var(--panel);
+    border-bottom: 1px solid var(--border); font-size: 13px; }
+  .prov .kv { color: var(--muted); }
+  .prov .kv b { color: var(--text); font-weight: 600; }
+  .prov .srclabel { color: var(--link); overflow-wrap: anywhere; }
+  .prov .verified { color: var(--green); display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .prov .verified .led { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .doc { padding: 22px; max-height: 52vh; overflow: auto; }
+  .doc pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.7 inherit; color: #d7dee6; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+  @media (max-width: 900px) {
+    .hero h1 { font-size: 32px; }
+    .steps { grid-template-columns: 1fr; }
+    .scenarios { grid-template-columns: 1fr 1fr; }
+    .searchbar { flex-direction: column; }
+    .btn { width: 100%; }
+    .score { min-width: 96px; }
+  }
+  @media (max-width: 560px) { .scenarios { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<a class="sr-only" href="#search-input">Skip to search</a>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="dot" aria-hidden="true"></span><span id="brand-name"></span></div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#cases">Use cases</a>
+      <a href="#pilot">Get a pilot</a>
+      <span id="mode-badge" class="badge live" title="Data mode">
+        <span class="led" aria-hidden="true"></span><span id="mode-label">Live</span>
+      </span>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <h1>Corporate memory your team can <span class="accent">trace to the source</span>.</h1>
+      <p class="sub" id="tagline"></p>
+
+      <form class="searchbar" id="search-form" role="search" autocomplete="off">
+        <div class="field">
+          <label class="sr-only" for="search-input">Ask the demo knowledge base</label>
+          <input id="search-input" type="search" name="q"
+                 placeholder="Ask the demo knowledge base — e.g. “How do I set up the VPN?”" />
+        </div>
+        <button class="btn" id="search-btn" type="submit">Search</button>
+      </form>
+
+      <div id="scenario-bar" class="scenario-bar" hidden></div>
+      <div class="sc-lead">Or run a memory use-case — a simulated agent session that asks several questions in a row:</div>
+      <div class="scenarios" id="scenarios" aria-label="Memory use-case scenarios"></div>
+    </div>
+  </section>
+
+  <section class="results wrap" aria-live="polite">
+    <div id="final-answer" class="final-answer" hidden></div>
+    <div class="meta" id="results-meta"></div>
+    <div id="pipeline-trace" class="pipe-trace" hidden></div>
+    <div id="graph-panel" class="graph-panel" hidden>
+      <div class="graph-head">
+        <span class="gtitle">How the answer is found — in your company's memory graph</span>
+        <span class="glegend">
+          <span class="k match"></span>match
+          <span class="k person"></span>person
+          <span class="k decision"></span>decision
+          <span class="k project"></span>project
+          <span class="k doc"></span>document
+          <span class="k concept"></span>concept
+        </span>
+      </div>
+      <div class="graph-steps">
+        <span class="graph-caption" id="graph-caption" aria-live="polite"></span>
+        <span class="graph-ctrl">
+          <button type="button" class="stepbtn" id="graph-prev" aria-label="Previous step" title="Previous step">&#9664;</button>
+          <span class="graph-dots" id="graph-dots" role="tablist"></span>
+          <button type="button" class="stepbtn" id="graph-next" aria-label="Next step" title="Next step">&#9654;</button>
+          <button type="button" class="replaybtn" id="graph-replay" title="Play all steps">&#8635; Auto</button>
+        </span>
+      </div>
+      <div class="graph-wrap"><svg id="graph-svg" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="Knowledge graph of retrieved articles and the concepts linking them"></svg></div>
+      <div class="graph-note">Not a flat similarity list: your question is traced through the company's memory — matches connect to the people, decisions and processes behind them. The assistant surfaces this context with sources; you stay in control.</div>
+    </div>
+    <div id="results"></div>
+  </section>
+
+  <section class="how" id="how">
+    <div class="wrap">
+      <h2>Every answer is a receipt, not a guess.</h2>
+      <p class="lead">A typed knowledge graph plus vector search over your company's memory — people,
+        decisions, documents and how they connect. Nothing is invented: every answer carries the original
+        source and the people behind it, isolated per knowledge base — context for you and your assistants.</p>
+      <div class="steps">
+        <div class="step">
+          <span class="n">1</span>
+          <h4>Retain</h4>
+          <p>Paste an article as-is. It is chunked, linked into the graph and indexed — the original is kept verbatim.</p>
+        </div>
+        <div class="step">
+          <span class="n">2</span>
+          <h4>Recall</h4>
+          <p>Ask in natural language. Hybrid vector + full-text + graph neighbours return the most relevant passages with a score.</p>
+        </div>
+        <div class="step">
+          <span class="n">3</span>
+          <h4>Verify the source</h4>
+          <p>One click opens the full original with its provenance. Every knowledge base stays isolated by namespace.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="how cases" id="cases">
+    <div class="wrap">
+      <h2>What your team does with it</h2>
+      <p class="lead">The memory is the foundation — verifiable context about your people, decisions and
+        processes. It powers assistants and agents, but a human always reviews, decides and signs.</p>
+      <div class="steps">
+        <div class="step">
+          <span class="n">1</span>
+          <h4>Your personal assistant</h4>
+          <p>At your own workstation, ask about a policy, a past decision, or who owns a project. You get
+            the answer with its exact source and the people behind it — you read it and decide.</p>
+        </div>
+        <div class="step">
+          <span class="n">2</span>
+          <h4>Agents on the same memory</h4>
+          <p>Process agents work alongside your team with their own roles and access. A tendering agent
+            knows every tender and your company and drafts the strongest bid; a records agent assembles
+            the paperwork. You review and sign.</p>
+        </div>
+        <div class="step">
+          <span class="n">3</span>
+          <h4>Experience that stays</h4>
+          <p>Every decision, document and expert is retained and searchable. When someone leaves, their
+            experience stays — and a new hire gets sourced answers from day one.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta" id="pilot">
+    <div class="wrap">
+      <div class="box">
+        <div class="txt">
+          <h2>Run this on your own knowledge base.</h2>
+          <p>Point it at your handbook, policies or docs and get verifiable answers — with the source attached.</p>
+        </div>
+        <a class="btn" id="cta-btn" href="#">Request a pilot</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="sample"><span class="led" aria-hidden="true"></span> Synthetic sample data — no real customers or personal data.</span>
+    <span style="margin-left:auto" id="foot-mode"></span>
+  </div>
+</footer>
+
+<div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="sheet-title" aria-hidden="true">
+  <div class="sheet" id="sheet">
+    <header>
+      <h3 id="sheet-title">Source</h3>
+      <button class="close" id="sheet-close" aria-label="Close source view">&times;</button>
+    </header>
+    <div class="prov" id="sheet-prov"></div>
+    <div class="doc"><pre id="sheet-doc"></pre></div>
+  </div>
+</div>
+
+<script id="demo-config" type="application/json">{{ config_json | safe }}</script>
+<script id="demo-corpus" type="application/json">{{ corpus_json | safe }}</script>
+<script>
+(function () {
+  "use strict";
+  var CFG = JSON.parse(document.getElementById("demo-config").textContent);
+  var CORPUS = JSON.parse(document.getElementById("demo-corpus").textContent);
+
+  // ---- utilities ----
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function isUrl(s) { return typeof s === "string" && /^https?:\/\//i.test(s); }
+  // Человекочитаемое время движка: <1000мс → «840 ms», иначе «1.4 s».
+  function fmtMs(ms) {
+    ms = Number(ms) || 0;
+    return ms < 1000 ? (ms + " ms") : ((Math.round(ms / 100) / 10) + " s");
+  }
+
+  // Минимальный безопасный Markdown для ответа модели. HTML экранируется ПЕРВЫМ (XSS),
+  // затем на уже безопасном тексте включаем известные теги: **жирный**, *курсив*, `код`,
+  // маркированные/нумерованные списки, заголовки, абзацы. Ссылки не рендерим — цитаты идут
+  // отдельными кнопками-источниками, чужие URL в ответ не впускаем.
+  function mdInline(s) {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*\s][^*]*?)\*/g, "$1<em>$2</em>");
+    return s;
+  }
+  function renderMarkdown(text) {
+    var lines = String(text == null ? "" : text).split(/\r?\n/);
+    var html = [], list = null, para = [];
+    function closeList() { if (list) { html.push("</" + list + ">"); list = null; } }
+    function flushPara() { if (para.length) { html.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
+    for (var i = 0; i < lines.length; i++) {
+      var t = lines[i].trim();
+      // Пустая строка закрывает абзац, но НЕ список: модель часто разделяет пункты пустой
+      // строкой — иначе каждый пункт стал бы отдельным <ul>. Список закроют heading/абзац/конец.
+      if (!t) { flushPara(); continue; }
+      var h = t.match(/^#{1,6}\s+(.*)$/);
+      if (h) { flushPara(); closeList(); html.push('<p class="fa-h">' + mdInline(h[1]) + "</p>"); continue; }
+      var ul = t.match(/^[-*•]\s+(.*)$/);
+      var ol = t.match(/^\d+[.)]\s+(.*)$/);
+      if (ul) { flushPara(); if (list !== "ul") { closeList(); html.push("<ul>"); list = "ul"; } html.push("<li>" + mdInline(ul[1]) + "</li>"); continue; }
+      if (ol) { flushPara(); if (list !== "ol") { closeList(); html.push("<ol>"); list = "ol"; } html.push("<li>" + mdInline(ol[1]) + "</li>"); continue; }
+      closeList(); para.push(mdInline(t));
+    }
+    flushPara(); closeList();
+    return html.join("");
+  }
+
+  // ---- data providers (unified contract) ----
+  // search(query) -> [{title, snippet, score, source_url, node_id, heading}]
+  // getSource(node_id) -> {title, full_text, provenance}
+  function LiveProvider() {}
+  LiveProvider.prototype.search = function (query) {
+    return fetch(CFG.apiSearch, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query })
+    }).then(function (res) {
+      if (res.status === 429) throw new Error("Too many requests — please wait a moment.");
+      if (!res.ok) throw new Error("Search is temporarily unavailable.");
+      return res.json();
+    }).then(function (data) {
+      return {
+        graph: data.graph || null,
+        pipeline: data.pipeline || null,
+        took_ms: data.took_ms,
+        reranked: data.reranked,
+        results: (data.results || []).map(function (r) {
+          return {
+            node_id: r.node_key, title: r.title, heading: r.heading,
+            snippet: r.text, score: r.score, rerank_score: r.rerank_score, source_url: r.node_key
+          };
+        })
+      };
+    });
+  };
+  LiveProvider.prototype.getSource = function (nodeId) {
+    return fetch(CFG.apiSource + "?key=" + encodeURIComponent(nodeId)).then(function (res) {
+      if (!res.ok) throw new Error("Source is temporarily unavailable.");
+      return res.json();
+    }).then(function (s) {
+      return {
+        title: s.title,
+        full_text: s.content,
+        provenance: {
+          source_url: s.node_key, source: s.source, source_path: s.source_path,
+          origin: s.origin, confidence: s.confidence, last_seen: s.last_seen
+        }
+      };
+    });
+  };
+  LiveProvider.prototype.answer = function (query) {
+    return fetch(CFG.apiAnswer, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: query })
+    }).then(function (res) {
+      if (!res.ok) throw new Error("The assistant is temporarily unavailable.");
+      return res.json();
+    }).then(function (d) {
+      return { answer: d.answer || "", sources: d.sources || [], took_ms: d.took_ms };
+    });
+  };
+
+  // Canned: in-browser lexical scoring over an embedded corpus (offline sample).
+  function CannedProvider(corpus) {
+    this.k = CFG.searchK || 5;
+    this.docs = (corpus || []).map(function (a) {
+      return {
+        node_id: a.node_id, title: a.title || "", heading: a.category || "",
+        source_url: a.source_url || a.node_id, source_label: a.source_label || "",
+        body: a.body || "",
+        _title: (a.title || "").toLowerCase(),
+        _body: (a.body || "").toLowerCase()
+      };
+    });
+  }
+  CannedProvider.prototype._tokens = function (s) {
+    return (s.toLowerCase().match(/[a-z0-9]+/g) || []).filter(function (t) { return t.length > 2; });
+  };
+  CannedProvider.prototype.search = function (query) {
+    var self = this;
+    var terms = this._tokens(query);
+    var scored = this.docs.map(function (d) {
+      var s = 0;
+      for (var i = 0; i < terms.length; i++) {
+        var t = terms[i];
+        var inTitle = d._title.indexOf(t) !== -1 ? 1 : 0;
+        var body = d._body.split(t).length - 1;
+        s += inTitle * 3 + Math.min(body, 4);
+      }
+      return { d: d, raw: s };
+    }).filter(function (x) { return x.raw > 0; });
+    scored.sort(function (a, b) { return b.raw - a.raw; });
+    var max = scored.length ? scored[0].raw : 1;
+    var top = scored.slice(0, this.k).map(function (x) {
+      return {
+        node_id: x.d.node_id, title: x.d.title, heading: x.d.heading,
+        source_url: x.d.source_url, score: Math.round((x.raw / max) * 1000) / 1000,
+        snippet: self._snippet(x.d.body, terms)
+      };
+    });
+    return Promise.resolve({ results: top, graph: null });
+  };
+  CannedProvider.prototype._snippet = function (body, terms) {
+    var low = body.toLowerCase(), pos = -1;
+    for (var i = 0; i < terms.length; i++) {
+      var p = low.indexOf(terms[i]);
+      if (p !== -1 && (pos === -1 || p < pos)) pos = p;
+    }
+    var start = pos > 60 ? pos - 60 : 0;
+    var frag = body.slice(start, start + 320).trim();
+    return (start > 0 ? "…" : "") + frag + (body.length > start + 320 ? "…" : "");
+  };
+  CannedProvider.prototype.getSource = function (nodeId) {
+    var d = null;
+    for (var i = 0; i < this.docs.length; i++) if (this.docs[i].node_id === nodeId) { d = this.docs[i]; break; }
+    if (!d) return Promise.reject(new Error("Source not found."));
+    return Promise.resolve({
+      title: d.title, full_text: d.body,
+      provenance: { source_url: d.source_url, source: d.source_label, origin: "sample" }
+    });
+  };
+  CannedProvider.prototype.answer = function () { return Promise.resolve(null); };  // офлайн: без LLM
+
+  var provider = (CFG.mode === "canned") ? new CannedProvider(CORPUS) : new LiveProvider();
+
+  // ---- brand / config wiring ----
+  el("brand-name").textContent = CFG.brand.name;
+  document.getElementById("tagline").textContent = CFG.brand.tagline;
+  var badge = el("mode-badge"), modeLabel = el("mode-label"), footMode = el("foot-mode");
+  if (CFG.mode === "canned") {
+    badge.className = "badge canned"; modeLabel.textContent = "Offline sample";
+    footMode.textContent = "Offline sample — search runs in your browser.";
+  } else {
+    badge.className = "badge live"; modeLabel.textContent = "Live";
+    footMode.textContent = "Live — answers served from the memory engine.";
+  }
+  var cta = el("cta-btn");
+  cta.setAttribute("href", CFG.cta || "#");
+
+  // ---- use-case scenarios: клик по карточке запускает сессию агента —
+  // последовательность запросов к памяти (имитация харнеса, «взгляд вглубь») ----
+  var SCENARIOS = CFG.scenarios || [];
+  var scBar = el("scenario-bar"), scActive = null, scStep = 0, scPlaying = false, scDone = false, scTimer = null;
+  // Пауза между авто-шагами — только на разглядывание: сама работа движка предзапрошена
+  // параллельно на старте сценария, поэтому шаги показываются из кэша мгновенно.
+  var SC_PAUSE = 1700;
+  (function buildScenarioGrid() {
+    var grid = el("scenarios");
+    SCENARIOS.forEach(function (sc, idx) {
+      var card = document.createElement("button");
+      card.type = "button"; card.className = "scenario-card";
+      card.innerHTML = '<span class="kick">' + esc(sc.kicker) + '</span>' +
+        '<span class="ttl">' + esc(sc.title) + '</span>' +
+        '<span class="n">' + ((sc.steps || []).length) + ' queries + answer · click to run</span>';
+      card.addEventListener("click", function () { startScenario(idx); });
+      grid.appendChild(card);
+    });
+  })();
+
+  function startScenario(idx) {
+    scActive = SCENARIOS[idx];
+    if (!scActive || !scActive.steps || !scActive.steps.length) return;
+    clearTimeout(scTimer);
+    scDone = false; scPlaying = true;
+    hideFinalAnswer();
+    prefetchScenario(scActive);
+    renderScenarioBar();
+    scBar.hidden = false;
+    goScenarioStep(0);
+  }
+  // Предзапрос: вся тяжёлая работа (поиск+реранк+граф на каждый шаг И финальный ответ)
+  // стартует РАЗОМ, конкурентно — движок молотит их параллельно, а проигрывание потом лишь
+  // показывает готовые результаты из кэша. Итоговое время ≈ время одного шага (почти realtime).
+  function prefetchScenario(sc) {
+    var token = (sc._token = {});  // защита от гонок: кэш от прошлого сценария не подхватится
+    sc._searchCache = sc.steps.map(function (st) {
+      return provider.search(st.query).then(
+        function (d) { return d; }, function (e) { return { __error: e }; }
+      );
+    });
+    var goal = sc.goal || sc.title;
+    sc._answerCache = provider.answer
+      ? provider.answer(goal).then(function (a) { return a; }, function (e) { return { __error: e }; })
+      : null;
+    sc._token = token;
+  }
+  function exitScenario() {
+    clearTimeout(scTimer);
+    scActive = null; scPlaying = false; scBar.hidden = true;
+    hideFinalAnswer();
+    var t = el("pipeline-trace"); if (t) t.hidden = true;
+  }
+  function scPause() { scPlaying = false; clearTimeout(scTimer); updateScenarioBar(); }
+  function scPlay() { if (scActive && !scDone) { scPlaying = true; updateScenarioBar(); scAfterStep(); } }
+  function scAfterStep() {
+    if (!scActive || !scPlaying) return;
+    clearTimeout(scTimer);
+    scTimer = setTimeout(
+      scStep < scActive.steps.length - 1 ? function () { goScenarioStep(scStep + 1); } : runFinalAnswer,
+      SC_PAUSE
+    );
+  }
+  function goScenarioStep(i) {
+    if (!scActive) return;
+    clearTimeout(scTimer);
+    scDone = false;
+    scStep = Math.max(0, Math.min(scActive.steps.length - 1, i));
+    updateScenarioBar();
+    var q = scActive.steps[scStep].query;
+    input.value = q;
+    // Берём предзапрошенный результат шага из кэша (обычно уже готов) — показ мгновенный.
+    var cached = scActive._searchCache && scActive._searchCache[scStep];
+    runSearch(q, cached).then(function () { if (scActive && scPlaying) scAfterStep(); });
+  }
+  function renderScenarioBar() {
+    var s = scActive;
+    var steps = s.steps.map(function (st, i) {
+      return '<span class="sc-step" data-i="' + i + '"><span class="num">' + (i + 1) + '</span>' + esc(st.label) + '</span>';
+    }).join("") + '<span class="sc-step sc-final" data-i="final"><span class="num">&#10022;</span>Answer</span>';
+    scBar.innerHTML =
+      '<div class="sc-top"><span class="sc-kick">' + esc(s.kicker) + '</span>' +
+      '<span class="sc-title">' + esc(s.title) + '</span>' +
+      '<button class="sc-exit" type="button">&times; Exit</button></div>' +
+      '<div class="sc-steps">' + steps +
+      '<span class="sc-nav"><button type="button" class="sc-play"></button>' +
+      '<button type="button" class="sc-prev" aria-label="Previous">&#9664;</button>' +
+      '<button type="button" class="sc-next" aria-label="Next">&#9654;</button></span></div>';
+    scBar.querySelector(".sc-exit").addEventListener("click", exitScenario);
+    scBar.querySelector(".sc-play").addEventListener("click", function () { scPlaying ? scPause() : scPlay(); });
+    scBar.querySelector(".sc-prev").addEventListener("click", function () { scPause(); goScenarioStep(scStep - 1); });
+    scBar.querySelector(".sc-next").addEventListener("click", function () { scPause(); goScenarioStep(scStep + 1); });
+    Array.prototype.forEach.call(scBar.querySelectorAll(".sc-step"), function (elm) {
+      elm.addEventListener("click", function () {
+        var di = elm.getAttribute("data-i");
+        scPause();
+        if (di === "final") runFinalAnswer(); else goScenarioStep(Number(di));
+      });
+    });
+    updateScenarioBar();
+  }
+  function updateScenarioBar() {
+    Array.prototype.forEach.call(scBar.querySelectorAll(".sc-step"), function (elm) {
+      var di = elm.getAttribute("data-i");
+      if (di === "final") { elm.classList.toggle("on", scDone); return; }
+      elm.classList.toggle("on", !scDone && Number(di) === scStep);
+      elm.classList.toggle("done", scDone || Number(di) < scStep);
+    });
+    var play = scBar.querySelector(".sc-play");
+    if (play) play.innerHTML = scPlaying ? "&#10073;&#10073; Pause" : "&#9654; Play";
+    var prev = scBar.querySelector(".sc-prev"), next = scBar.querySelector(".sc-next");
+    if (prev) prev.disabled = scStep <= 0 && !scDone;
+    if (next) next.disabled = scStep >= (scActive ? scActive.steps.length - 1 : 0);
+  }
+  function runFinalAnswer() {
+    if (!scActive) return;
+    clearTimeout(scTimer); scPlaying = false; scDone = true;
+    updateScenarioBar();
+    var goal = scActive.goal || scActive.title;
+    input.value = goal;
+    showFinalAnswer(null, true);
+    // Финальный ответ тоже предзапрошен на старте — к этому моменту обычно уже готов.
+    var ap = scActive._answerCache || (provider.answer ? provider.answer(goal) : null);
+    if (!ap) { showFinalAnswer({ answer: "The final answer runs on the live engine (the offline sample has no LLM).", sources: [] }); return; }
+    ap.then(function (a) {
+      if (a && a.__error) throw a.__error;
+      if (!a) { hideFinalAnswer(); return; }
+      showFinalAnswer(a);
+    }).catch(function (err) {
+      showFinalAnswer({ answer: (err && err.message) || "The assistant is temporarily unavailable.", sources: [] });
+    });
+  }
+  function hideFinalAnswer() { var f = el("final-answer"); if (f) f.hidden = true; }
+  function showFinalAnswer(a, loading) {
+    var f = el("final-answer"); if (!f) return;
+    if (loading) {
+      f.innerHTML = '<div class="fa-head"><span class="fa-badge">Assistant</span> Synthesizing an answer from memory…</div>';
+      f.hidden = false; f.scrollIntoView({ behavior: "smooth", block: "nearest" }); return;
+    }
+    var srcs = (a.sources || []).map(function (s) {
+      var k = s.node_key || s.source_path || "";
+      return '<button type="button" class="fa-src" data-key="' + esc(k) + '">' + esc(gtrunc(s.title || k, 42)) + '</button>';
+    }).join("");
+    var rt = (a.took_ms != null) ? '<span class="fa-rt"><span class="spark">⚡</span>' + fmtMs(a.took_ms) + '</span>' : '';
+    f.innerHTML = '<div class="fa-head"><span class="fa-badge">Assistant</span> Answer from your memory' + rt + '</div>' +
+      '<div class="fa-body">' + renderMarkdown(a.answer || "No answer.") + '</div>' +
+      (srcs ? '<div class="fa-srcs"><span class="fa-lbl">Sources:</span> ' + srcs + '</div>' : '') +
+      '<div class="fa-note">Surfaced from memory with sources — you review, decide and sign.</div>';
+    f.hidden = false;
+    Array.prototype.forEach.call(f.querySelectorAll(".fa-src"), function (b) {
+      b.addEventListener("click", function () {
+        var k = b.getAttribute("data-key");
+        openSource({ node_id: k, title: b.textContent, source_url: k });
+      });
+    });
+    f.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  // ---- search flow ----
+  var input = el("search-input"), form = el("search-form"), btn = el("search-btn");
+  var meta = el("results-meta"), out = el("results");
+  var lastFocus = null;
+
+  // Индикатор релевантности. Если движок реранкнул (rerank_score, ADR-005) — показываем
+  // НАСТОЯЩУЮ уверенность 0..1 в процентах (CONFIDENCE). Иначе fallback: rank-fusion score
+  // (RRF) мал по природе, поэтому показываем долю от лучшего в выдаче (топ = 100%, RELEVANCE).
+  function scoreBar(r, maxScore) {
+    var pct, cap;
+    if (r.rerank_score != null) {
+      pct = Math.round(Math.max(0, Math.min(1, Number(r.rerank_score))) * 100);
+      cap = "CONFIDENCE";
+    } else {
+      var rel = maxScore > 0 ? (Number(r.score) || 0) / maxScore : 0;
+      pct = Math.round(Math.max(0, Math.min(1, rel)) * 100);
+      cap = "RELEVANCE";
+    }
+    return '<div class="score"><div class="num">' + pct + '%</div>' +
+           '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+           '<div class="cap">' + cap + '</div></div>';
+  }
+  function card(r, idx, maxScore) {
+    var srcUrl = r.source_url || r.node_id;
+    // Ссылка-источник открывает СОХРАНЁННЫЙ оригинал (модалка), а не внешний URL:
+    // адреса синтетические (провенанс-цитата), живой страницы за ними нет.
+    var urlHtml = '<button type="button" class="srcbtn" data-open="' + idx +
+      '" title="Open the stored source document">' + esc(srcUrl) + '</button>';
+    return '' +
+      '<article class="card">' +
+        '<div class="rowtop">' +
+          '<h3><button type="button" data-open="' + idx + '">' + esc(r.title || "Untitled") + '</button></h3>' +
+          scoreBar(r, maxScore) +
+        '</div>' +
+        (r.heading ? '<div class="heading">' + esc(r.heading) + '</div>' : '') +
+        '<p class="snippet">' + esc(r.snippet || "") + '</p>' +
+        '<div class="src">' + urlHtml +
+          '<span class="view"><button type="button" data-open="' + idx + '">View source &rarr;</button></span>' +
+        '</div>' +
+      '</article>';
+  }
+
+  var current = [];
+  function render(results) {
+    current = results;
+    if (!results.length) {
+      out.innerHTML = '<div class="empty">No matching passages found. Try one of the example questions above.</div>';
+      return;
+    }
+    var maxScore = 0;
+    results.forEach(function (r) { if ((Number(r.score) || 0) > maxScore) maxScore = Number(r.score) || 0; });
+    out.innerHTML = results.map(function (r, i) { return card(r, i, maxScore); }).join("");
+    Array.prototype.forEach.call(out.querySelectorAll("[data-open]"), function (b) {
+      b.addEventListener("click", function () { openSource(results[Number(b.getAttribute("data-open"))]); });
+    });
+  }
+
+  // ---- knowledge-graph panel: seed matches → shared concepts → related articles ----
+  function gtrunc(s, n) { s = String(s == null ? "" : s); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+  var graphTimer = null;
+  // Стиль узла по типу: цвет + радиус + подпись-легенда. Облако раскрашивается по типу
+  // (люди/решения/проекты/доки/концепты…) — видно устройство памяти компании.
+  var TYPE_STYLE = {
+    person: { c: "#4ec9b0", r: 8, label: "person" },
+    decision: { c: "#c586c0", r: 7, label: "decision" },
+    project: { c: "#e8a44c", r: 7, label: "project" },
+    product: { c: "#56b6c2", r: 7, label: "product" },
+    product_doc: { c: "#6ca6ff", r: 6, label: "document" },
+    article: { c: "#6ca6ff", r: 6, label: "document" },
+    concept: { c: "#ffbe4d", r: 5, label: "concept" },
+    task: { c: "#9aa7b4", r: 5, label: "task" },
+    meeting: { c: "#e06c9f", r: 6, label: "meeting" },
+    question: { c: "#d7ba7d", r: 5, label: "question" },
+    customer: { c: "#7bc86c", r: 6, label: "customer" },
+    team: { c: "#8fa1b3", r: 6, label: "team" }
+  };
+  function tstyle(t) { return TYPE_STYLE[t] || { c: "#8b98a5", r: 6, label: t || "node" }; }
+
+  // Силовая раскладка (Fruchterman–Reingold): узлы отталкиваются, рёбра стягивают —
+  // получается органичное «облако», в котором связанное лежит рядом.
+  function glayout(nodes, links, W, H) {
+    var n = nodes.length || 1;
+    var k = Math.sqrt((W * H) / n) * 0.92;
+    var PADX = 72, PADY = 30;
+    nodes.forEach(function (nd, i) {
+      // равномерный старт по спирали (золотой угол) — без начального слипания
+      var ang = i * 2.399963, rad = Math.sqrt((i + 0.5) / n) * Math.min(W, H) * 0.46;
+      nd.x = W / 2 + Math.cos(ang) * rad + (Math.random() - 0.5) * 30;
+      nd.y = H / 2 + Math.sin(ang) * rad + (Math.random() - 0.5) * 30;
+    });
+    var iters = 320;
+    for (var it = 0; it < iters; it++) {
+      var t = 1 - it / iters, i;
+      for (i = 0; i < n; i++) { nodes[i].dx = 0; nodes[i].dy = 0; }
+      for (i = 0; i < n; i++) {
+        var a = nodes[i];
+        for (var j = i + 1; j < n; j++) {
+          var b = nodes[j], dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+          var rep = (k * k) / d, ux = dx / d, uy = dy / d;
+          a.dx += ux * rep; a.dy += uy * rep; b.dx -= ux * rep; b.dy -= uy * rep;
+        }
+      }
+      links.forEach(function (l) {
+        var a = l.a, b = l.b, dx = a.x - b.x, dy = a.y - b.y, d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        var att = (d * d) / k * 0.85, ux = dx / d, uy = dy / d;
+        a.dx -= ux * att; a.dy -= uy * att; b.dx += ux * att; b.dy += uy * att;
+      });
+      for (i = 0; i < n; i++) {
+        var nd = nodes[i];
+        nd.dx += (W / 2 - nd.x) * 0.02; nd.dy += (H / 2 - nd.y) * 0.025;
+        var disp = Math.sqrt(nd.dx * nd.dx + nd.dy * nd.dy) || 0.01, lim = Math.min(disp, 30 * t + 2);
+        nd.x += (nd.dx / disp) * lim; nd.y += (nd.dy / disp) * lim;
+        nd.x = Math.max(PADX, Math.min(W - PADX, nd.x)); nd.y = Math.max(PADY, Math.min(H - PADY, nd.y));
+      }
+    }
+    // анти-коллизия: гарантируем минимальную дистанцию между центрами (кружки не слипаются)
+    var minD = 48;
+    for (var c = 0; c < 20; c++) {
+      for (var i2 = 0; i2 < n; i2++) {
+        for (var j2 = i2 + 1; j2 < n; j2++) {
+          var a2 = nodes[i2], b2 = nodes[j2], dx2 = a2.x - b2.x, dy2 = a2.y - b2.y;
+          var d2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 0.01;
+          if (d2 < minD) {
+            var push = (minD - d2) / 2, ux2 = dx2 / d2, uy2 = dy2 / d2;
+            a2.x += ux2 * push; a2.y += uy2 * push; b2.x -= ux2 * push; b2.y -= uy2 * push;
+          }
+        }
+      }
+      nodes.forEach(function (nd) {
+        nd.x = Math.max(PADX, Math.min(W - PADX, nd.x)); nd.y = Math.max(PADY, Math.min(H - PADY, nd.y));
+      });
+    }
+  }
+
+  function renderGraph(graph, results) {
+    var panel = el("graph-panel"), svg = el("graph-svg");
+    if (!graph || !graph.nodes || graph.nodes.length < 2) { panel.hidden = true; return; }
+    var conf = {};
+    (results || []).forEach(function (r) { if (r.rerank_score != null) conf[r.node_id] = r.rerank_score; });
+    var W = 1000, H = Math.max(430, Math.min(760, Math.round(118 * Math.sqrt(graph.nodes.length))));
+    var byKey = {};
+    var nodes = graph.nodes.map(function (nd) {
+      var o = { key: nd.natural_key, type: nd.type || "entity", title: nd.title || nd.natural_key,
+        role: nd.role, hop: (nd.hop == null ? 2 : Math.min(nd.hop, 2)) };
+      byKey[o.key] = o; return o;
+    });
+    var links = [];
+    graph.edges.forEach(function (e) {
+      var a = byKey[e.src], b = byKey[e.dst];
+      if (a && b) links.push({ a: a, b: b, type: e.type, hop: Math.max(a.hop, b.hop) });
+    });
+    glayout(nodes, links, W, H);
+
+    var parts = [];
+    links.forEach(function (l) {
+      parts.push('<line class="cedge" data-hop="' + l.hop + '" x1="' + l.a.x.toFixed(1) + '" y1="' + l.a.y.toFixed(1) +
+        '" x2="' + l.b.x.toFixed(1) + '" y2="' + l.b.y.toFixed(1) + '"><title>' + esc((l.type || "").toLowerCase().replace(/_/g, " ")) + '</title></line>');
+    });
+    nodes.forEach(function (nd) {
+      var st = tstyle(nd.type), isSeed = nd.role === "seed", r = isSeed ? st.r + 3 : st.r;
+      var clickable = nd.type !== "concept" && nd.type !== "team";
+      // подпись справа для левой части облака, иначе слева — чтобы не уходить за край
+      var rightSide = nd.x < W * 0.6;
+      var lx = rightSide ? nd.x + r + 5 : nd.x - r - 5, anchor = rightSide ? "start" : "end";
+      var label = gtrunc(nd.title, isSeed ? 30 : 22);
+      var hoverOnly = nd.hop > 1;  // подписи всегда только до 2 уровня; глубже — по наведению
+      var g = '<g class="cnode' + (clickable ? " clickable" : "") + (isSeed ? " seed" : "") + '" data-hop="' + nd.hop + '"' +
+        (clickable ? ' data-key="' + esc(nd.key) + '" role="button" tabindex="0"' : '') +
+        '><title>' + esc(nd.title) + ' · ' + esc(st.label) + '</title>';
+      if (isSeed) g += '<circle class="cseedring" cx="' + nd.x.toFixed(1) + '" cy="' + nd.y.toFixed(1) + '" r="' + (r + 5) + '" fill="none" stroke="#f5a623" stroke-width="2"/>';
+      g += '<circle class="cdot" cx="' + nd.x.toFixed(1) + '" cy="' + nd.y.toFixed(1) + '" r="' + r + '" fill="' + st.c + '"' + (isSeed ? ' stroke="#fff3d6" stroke-width="1.5"' : '') + '/>' +
+        '<text class="clabel' + (hoverOnly ? " lbl-hover" : "") + '" x="' + lx.toFixed(1) + '" y="' + (nd.y + 4).toFixed(1) + '" text-anchor="' + anchor + '" fill="' + (isSeed ? "#ffe0a3" : "#aeb9c4") + '" font-size="' + (isSeed ? 13 : 11) + '"' + (isSeed ? ' font-weight="600"' : '') + '>' + esc(label) + '</text>';
+      if (isSeed && conf[nd.key] != null) {
+        var pct = Math.round(Math.max(0, Math.min(1, conf[nd.key])) * 100), cy = nd.y + r + 12;
+        g += '<g class="cconf"><rect x="' + (nd.x - 21).toFixed(1) + '" y="' + (cy - 8).toFixed(1) + '" width="42" height="16" rx="8" fill="#1a1204" stroke="#f5a623" stroke-width="1"/>' +
+          '<text x="' + nd.x.toFixed(1) + '" y="' + (cy + 4).toFixed(1) + '" text-anchor="middle" fill="#ffbe4d" font-size="10" font-weight="700">' + pct + '%</text></g>';
+      }
+      parts.push(g + '</g>');
+    });
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.innerHTML = parts.join("");
+    panel.hidden = false;
+    Array.prototype.forEach.call(svg.querySelectorAll(".clickable"), function (g) {
+      var k = g.getAttribute("data-key");
+      var open = function () { openSource({ node_id: k, title: (byKey[k] && byKey[k].title) || "Source", source_url: k }); };
+      g.addEventListener("click", open);
+      g.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    });
+    playGraph();
+  }
+
+  // Проход запроса по облаку: совпадения → рябь по рёбрам к соседям → реранк → человек решает.
+  var GRAPH_STAGES = [
+    "Your question matches these passages",
+    "Following the graph — the people, decisions and concepts they connect to",
+    "…and what those connect to in turn",
+    "A reranker scores each match by true relevance",
+    "Verifiable answers — you stay in control"
+  ];
+  var graphStage = 0;
+  // Установить визуальное состояние облака на конкретный шаг (для авто- и ручного режима).
+  function setStage(i) {
+    var svg = el("graph-svg"), cap = el("graph-caption"), dots = el("graph-dots");
+    if (el("graph-panel").hidden) return;
+    i = Math.max(0, Math.min(GRAPH_STAGES.length - 1, i));
+    graphStage = i;
+    cap.textContent = (i + 1) + " · " + GRAPH_STAGES[i];
+    Array.prototype.forEach.call(dots.querySelectorAll("i"), function (d, idx) {
+      d.classList.toggle("on", idx === i);
+      d.classList.toggle("done", idx < i);
+    });
+    var revealHops = Math.min(i, 2);  // шаги 4–5 держат всё облако раскрытым
+    Array.prototype.forEach.call(svg.querySelectorAll("[data-hop]"), function (e) {
+      var h = Number(e.getAttribute("data-hop"));
+      e.classList.toggle("on", h <= revealHops);
+      e.classList.toggle("pulse", i <= 2 && h === i);
+    });
+    Array.prototype.forEach.call(svg.querySelectorAll(".cconf"), function (e) { e.classList.toggle("on", i >= 3); });
+    Array.prototype.forEach.call(svg.querySelectorAll(".cnode.seed"), function (e) { e.classList.toggle("finalpulse", i >= 4); });
+    var prev = el("graph-prev"), next = el("graph-next");
+    if (prev) prev.disabled = i <= 0;
+    if (next) next.disabled = i >= GRAPH_STAGES.length - 1;
+  }
+  // Автопроигрывание всех шагов (перебивается ручным управлением Prev/Next/точками).
+  function playGraph() {
+    var dots = el("graph-dots");
+    if (el("graph-panel").hidden) return;
+    if (dots.querySelectorAll("i").length !== GRAPH_STAGES.length) {
+      dots.innerHTML = GRAPH_STAGES.map(function (_s, i) {
+        return '<i data-step="' + i + '" title="Step ' + (i + 1) + '"></i>';
+      }).join("");
+    }
+    clearTimeout(graphTimer);
+    setStage(0);
+    // В авто-прогоне сценария граф-историю проигрываем быстрее — шаг не должен «тянуться».
+    var iv = (scActive && scPlaying) ? 620 : 1150;
+    (function tick() {
+      if (graphStage < GRAPH_STAGES.length - 1) {
+        graphTimer = setTimeout(function () { setStage(graphStage + 1); tick(); }, iv);
+      }
+    })();
+  }
+  function graphStep(delta) { clearTimeout(graphTimer); setStage(graphStage + delta); }
+
+  function runSearch(q, prefetched) {
+    q = (q || "").trim();
+    if (!q) { input.focus(); return Promise.resolve(); }
+    input.value = q;
+    btn.disabled = true; meta.textContent = "Searching memory…"; out.innerHTML = "";
+    el("graph-panel").hidden = true;
+    var t = el("pipeline-trace"); if (t) t.hidden = true;
+    // Предзапрошенный промис (шаг сценария) или живой поиск. Оба возвращают один контракт.
+    var p = prefetched || provider.search(q);
+    return p.then(function (data) {
+      if (data && data.__error) throw data.__error;
+      btn.disabled = false;
+      var results = (data && data.results) || [];
+      meta.textContent = results.length
+        ? ('Top ' + results.length + ' passage' + (results.length > 1 ? "s" : "") + ' for “' + q + '” — open any source to verify.')
+        : ('No results for “' + q + '”.');
+      render(results);
+      renderGraph(data && data.graph, results);
+      renderPipeline(data);
+    }).catch(function (err) {
+      btn.disabled = false; meta.textContent = "";
+      out.innerHTML = '<div class="errbox">' + esc(err.message || "Something went wrong.") + '</div>';
+      renderPipeline(null);
+    });
+  }
+
+  // Наглядный конвейер поиска: этапы движка с РЕАЛЬНЫМИ счётчиками + время «почти realtime».
+  // Карточки-этапы проявляются друг за другом (запрос «течёт» по движку). Данные — с бэкенда
+  // (data.pipeline, data.took_ms); в офлайн-режиме их нет, тогда конвейер просто скрыт.
+  function renderPipeline(data) {
+    var t = el("pipeline-trace");
+    if (!t) return;
+    var stages = data && data.pipeline;
+    if (!stages || !stages.length) { t.hidden = true; t.innerHTML = ""; return; }
+    var cards = stages.map(function (s, i) {
+      var badge = "";
+      if (s.confidence != null) badge = '<span class="pl-badge">top ' + Math.round(s.confidence * 100) + '%</span>';
+      else if (s.dropped) badge = '<span class="pl-badge muted">&minus;' + esc(String(s.dropped)) + ' below gate</span>';
+      var count = (s.count != null) ? '<span class="pl-count">' + esc(String(s.count)) + '</span>' : '';
+      var stage =
+        '<span class="pl-stage" style="animation-delay:' + (i * 220) + 'ms">' +
+          '<span class="pl-top">' + count + '<span class="pl-name">' + esc(s.label || "") + '</span></span>' +
+          (s.unit ? '<span class="pl-unit">' + esc(s.unit) + '</span>' : '') +
+          (s.detail ? '<span class="pl-detail">' + esc(s.detail) + '</span>' : '') + badge +
+        '</span>';
+      var arrow = i ? '<span class="pl-arrow" aria-hidden="true" style="animation-delay:' + (i * 220 - 110) + 'ms">&rarr;</span>' : '';
+      return arrow + stage;
+    }).join("");
+    var rt = (data.took_ms != null)
+      ? '<span class="pl-rt"><span class="spark">&#9889;</span>' + fmtMs(data.took_ms) + ' &middot; near real-time</span>'
+      : '';
+    t.innerHTML = '<div class="pl-lead">How this answer was found — your question flowing through the memory engine' + rt + '</div>' +
+      '<div class="pl-flow">' + cards + '</div>';
+    t.hidden = false;
+  }
+
+  form.addEventListener("submit", function (e) { e.preventDefault(); exitScenario(); runSearch(input.value); });
+
+  // ---- source view (modal) ----
+  var overlay = el("overlay"), sheetTitle = el("sheet-title"),
+      sheetProv = el("sheet-prov"), sheetDoc = el("sheet-doc"), sheetClose = el("sheet-close");
+
+  function kv(label, value) {
+    if (value == null || value === "") return "";
+    return '<span class="kv"><b>' + esc(label) + ':</b> ' + esc(value) + '</span>';
+  }
+  function openSource(r) {
+    lastFocus = document.activeElement;
+    sheetTitle.textContent = r.title || "Source";
+    sheetProv.innerHTML = '<span class="verified"><span class="led" aria-hidden="true"></span>Verified source</span>' +
+      '<span class="kv">Loading…</span>';
+    sheetDoc.textContent = "";
+    overlay.classList.add("open"); overlay.setAttribute("aria-hidden", "false");
+    sheetClose.focus();
+    provider.getSource(r.node_id).then(function (s) {
+      var p = s.provenance || {};
+      var url = p.source_url || r.source_url || r.node_id;
+      // Цитата-источник — текст (провенанс), а не внешняя ссылка: сам документ уже открыт ниже.
+      var urlCell = '<span class="kv"><b>Source:</b> <span class="srclabel">' + esc(url) + '</span></span>';
+      sheetProv.innerHTML =
+        '<span class="verified"><span class="led" aria-hidden="true"></span>Verified source</span>' +
+        urlCell + kv("Collection", p.source) + kv("Origin", p.origin) +
+        kv("Confidence", p.confidence) + kv("Last seen", p.last_seen);
+      sheetDoc.textContent = s.full_text || "(No stored content.)";
+    }).catch(function (err) {
+      sheetProv.innerHTML = '<span class="kv">' + esc(err.message || "Could not load source.") + '</span>';
+    });
+  }
+  function closeSource() {
+    overlay.classList.remove("open"); overlay.setAttribute("aria-hidden", "true");
+    if (lastFocus && lastFocus.focus) lastFocus.focus();
+  }
+  sheetClose.addEventListener("click", closeSource);
+  overlay.addEventListener("click", function (e) { if (e.target === overlay) closeSource(); });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && overlay.classList.contains("open")) closeSource();
+  });
+
+  var replayBtn = el("graph-replay");
+  if (replayBtn) replayBtn.addEventListener("click", playGraph);
+  var prevBtn = el("graph-prev"), nextBtn = el("graph-next"), dotsBox = el("graph-dots");
+  if (prevBtn) prevBtn.addEventListener("click", function () { graphStep(-1); });
+  if (nextBtn) nextBtn.addEventListener("click", function () { graphStep(1); });
+  if (dotsBox) dotsBox.addEventListener("click", function (e) {
+    var t = e.target && e.target.closest ? e.target.closest("i[data-step]") : null;
+    if (t) { clearTimeout(graphTimer); setStage(Number(t.getAttribute("data-step"))); }
+  });
+
+  input.focus();
+})();
+</script>
+</body>
+</html>

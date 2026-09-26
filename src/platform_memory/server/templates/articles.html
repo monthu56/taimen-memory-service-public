@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Статьи — Memory Console{% endblock %}
+{% block content %}
+<h1>Статьи — база знаний «{{ ns }}»</h1>
+
+<form class="toolbar" method="get" action="/console/articles">
+  <input type="hidden" name="ns" value="{{ ns }}">
+  <label>Поиск по названию или ключу
+    <input type="search" name="q" value="{{ q }}" placeholder="карта москвича…">
+  </label>
+  <label>Тип
+    <input type="text" name="type" value="{{ type }}" placeholder="article">
+  </label>
+  <button type="submit" class="action">Фильтровать</button>
+</form>
+
+{% if rows %}
+<p class="muted">Показано {{ shown }} из {{ total }} (новые сверху; полный корпус в браузер не загружается).</p>
+<table>
+  <thead><tr>
+    <th scope="col">Название</th><th scope="col">Источник</th><th scope="col">Тип</th>
+    <th scope="col">Обновлено</th><th scope="col">Чанки</th><th scope="col">ПДн</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td><a href="/console/articles/view?ns={{ ns | urlencode }}&amp;key={{ row.natural_key | urlencode }}">{{ row.title or row.natural_key }}</a></td>
+      <td class="mono">{{ row.source }}</td>
+      <td>{{ row.type }}</td>
+      <td class="mono">{{ row.updated }}</td>
+      <td>{{ row.chunks if row.chunks is defined else "—" }}</td>
+      <td>{% if row.pii %}<span class="badge">ПДн{% if row.pii_categories %}: {{ row.pii_categories | join(", ") }}{% endif %}</span>{% else %}<span class="muted">нет</span>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">В базе знаний «{{ ns }}» статей не найдено{% if q %} по запросу «{{ q }}»{% endif %}.
+  <a href="/console/import?ns={{ ns | urlencode }}">Импортировать статью</a>.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Поиск — Memory Console{% endblock %}
+{% block content %}
+<h1>Проверка поиска — база знаний «{{ ns }}»</h1>
+
+<form class="toolbar" method="get" action="/console/search">
+  <input type="hidden" name="ns" value="{{ ns }}">
+  <label>Вопрос оператора
+    <input type="search" name="q" value="{{ q }}" size="60"
+           placeholder="не приходит уведомление о готовности карты…">
+  </label>
+  <button type="submit" class="action">Искать</button>
+</form>
+
+{% if error %}
+<div class="panel err" role="alert">
+  <strong class="status-err">Поиск не выполнен.</strong>
+  <div class="mono">{{ error }}</div>
+</div>
+{% elif q and not results %}
+<p class="muted">Ничего не найдено в «{{ ns }}» по запросу «{{ q }}».</p>
+{% endif %}
+
+{% if results %}
+<p class="muted">Найдено {{ results | length }} фрагментов (trace <span class="mono">{{ trace_id }}</span>).</p>
+{% for hit in results %}
+<div class="panel" style="margin-bottom:1rem">
+  <h2 style="margin-top:0">{{ hit.title or hit.node_key }}{% if hit.heading %} — {{ hit.heading }}{% endif %}</h2>
+  <p>{{ hit.text }}</p>
+  <dl class="kv">
+    <dt>Score</dt><dd>{{ hit.score }}</dd>
+    <dt>Цитата</dt><dd class="mono">{{ hit.source_path }}</dd>
+  </dl>
+  <p><a href="/console/articles/view?ns={{ ns | urlencode }}&amp;key={{ hit.node_key | urlencode }}">Открыть оригинал статьи →</a></p>
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

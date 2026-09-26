@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Спросить — Memory Console{% endblock %}
+{% block content %}
+<h1>Спросить базу знаний «{{ ns }}»</h1>
+<p class="muted">Демо полного контура: вопрос → извлечение из графа → ответ модели с
+цитатами-источниками (то же, что <span class="mono">POST /api/brain/query</span>).</p>
+
+<!-- Вопрос уходит POST'ом: в нём бывают ПДн клиента, в URL и access-логах им не место. -->
+<form class="toolbar" method="post" action="/console/ask">
+  <input type="hidden" name="ns" value="{{ ns }}">
+  <label>Вопрос
+    <input type="search" name="q" value="{{ q }}" size="60"
+           placeholder="как продлить карту, если срок действия закончился…">
+  </label>
+  <button type="submit" class="action">Спросить</button>
+</form>
+
+{% if error %}
+<div class="panel err" role="alert">
+  <strong class="status-err">Ответ не получен.</strong>
+  <div class="mono">{{ error }}</div>
+</div>
+{% endif %}
+
+{% if answer %}
+<div class="panel">
+  <h2 style="margin-top:0">Ответ</h2>
+  <pre class="content">{{ answer.text }}</pre>
+  <p class="muted" style="margin-bottom:0">Найдено фрагментов: {{ answer.hits }},
+  соседей в графе: {{ answer.neighbors }} (trace <span class="mono">{{ trace_id }}</span>).</p>
+</div>
+
+{% if answer.sources %}
+<h2>Источники ответа</h2>
+<table>
+  <thead>
+    <tr><th>Статья</th><th>Цитата</th><th>Оригинал</th></tr>
+  </thead>
+  <tbody>
+    {% for s in answer.sources %}
+    <tr>
+      <td>{{ s.title or s.node_key }}</td>
+      <td class="mono">{{ s.source_path }}</td>
+      <td><a href="/console/articles/view?ns={{ ns | urlencode }}&amp;key={{ s.node_key | urlencode }}">Открыть →</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+{% endblock %}

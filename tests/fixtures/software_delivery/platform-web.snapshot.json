@@ -1,0 +1,168 @@
+{
+  "pack": "software-delivery@1",
+  "source": "git:platform-web",
+  "scope": "platform-web",
+  "snapshotId": "platform-web@9ab1c2d3e4f5000000000000000000000000beef",
+  "observedAt": "2026-09-23T08:47:12+00:00",
+  "entities": [
+    {
+      "kind": "component",
+      "key": "platform-web",
+      "attributes": {}
+    },
+    {
+      "kind": "source_file",
+      "key": "platform-web:src/app/runs/[id]/page.tsx",
+      "attributes": {
+        "path": "src/app/runs/[id]/page.tsx"
+      }
+    },
+    {
+      "kind": "source_file",
+      "key": "platform-web:src/lib/api/tasks.ts",
+      "attributes": {
+        "path": "src/lib/api/tasks.ts"
+      }
+    },
+    {
+      "kind": "ui_call",
+      "key": "platform-web:src/app/runs/[id]/page.tsx:38",
+      "attributes": {
+        "literal": "/runs/${id}/checkpoints",
+        "queryParams": [
+          "limit"
+        ]
+      },
+      "title": "/runs/${id}/checkpoints (src/app/runs/[id]/page.tsx:38)",
+      "provenance": {
+        "repo": "platform-web",
+        "sha": "9ab1c2d3e4f5000000000000000000000000beef",
+        "path": "src/app/runs/[id]/page.tsx",
+        "line": 38
+      }
+    },
+    {
+      "kind": "ui_call",
+      "key": "platform-web:src/app/runs/[id]/page.tsx:52",
+      "attributes": {
+        "literal": "/runs/${id}"
+      },
+      "title": "/runs/${id} (src/app/runs/[id]/page.tsx:52)",
+      "provenance": {
+        "repo": "platform-web",
+        "sha": "9ab1c2d3e4f5000000000000000000000000beef",
+        "path": "src/app/runs/[id]/page.tsx",
+        "line": 52
+      }
+    },
+    {
+      "kind": "ui_call",
+      "key": "platform-web:src/lib/api/tasks.ts:12",
+      "attributes": {
+        "literal": "/tasks"
+      },
+      "title": "/tasks (src/lib/api/tasks.ts:12)",
+      "provenance": {
+        "repo": "platform-web",
+        "sha": "9ab1c2d3e4f5000000000000000000000000beef",
+        "path": "src/lib/api/tasks.ts",
+        "line": 12
+      }
+    }
+  ],
+  "relations": [
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "platform-web:src/app/runs/[id]/page.tsx"
+      },
+      "to": {
+        "kind": "component",
+        "key": "platform-web"
+      }
+    },
+    {
+      "relation": "part_of",
+      "from": {
+        "kind": "source_file",
+        "key": "platform-web:src/lib/api/tasks.ts"
+      },
+      "to": {
+        "kind": "component",
+        "key": "platform-web"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "ui_call",
+        "key": "platform-web:src/app/runs/[id]/page.tsx:38"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "platform-web:src/app/runs/[id]/page.tsx"
+      }
+    },
+    {
+      "relation": "calls",
+      "from": {
+        "kind": "ui_call",
+        "key": "platform-web:src/app/runs/[id]/page.tsx:38"
+      },
+      "to": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/runs/{}/checkpoints"
+      },
+      "attributes": {
+        "queryParams": [
+          "limit"
+        ]
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "ui_call",
+        "key": "platform-web:src/app/runs/[id]/page.tsx:52"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "platform-web:src/app/runs/[id]/page.tsx"
+      }
+    },
+    {
+      "relation": "calls",
+      "from": {
+        "kind": "ui_call",
+        "key": "platform-web:src/app/runs/[id]/page.tsx:52"
+      },
+      "to": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/runs/{}"
+      }
+    },
+    {
+      "relation": "defined_in",
+      "from": {
+        "kind": "ui_call",
+        "key": "platform-web:src/lib/api/tasks.ts:12"
+      },
+      "to": {
+        "kind": "source_file",
+        "key": "platform-web:src/lib/api/tasks.ts"
+      }
+    },
+    {
+      "relation": "calls",
+      "from": {
+        "kind": "ui_call",
+        "key": "platform-web:src/lib/api/tasks.ts:12"
+      },
+      "to": {
+        "kind": "endpoint",
+        "key": "GET /api/v1/tasks"
+      }
+    }
+  ]
+}

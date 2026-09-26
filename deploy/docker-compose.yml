@@ -1,0 +1,75 @@
+# Изолированный инстанс memory-service: один заказчик = один такой контур.
+# Секреты и параметры — только из .env рядом с этим файлом (см. .env.example).
+#
+#   cd deploy && cp .env.example .env   # заполнить значения
+#   docker compose up -d --build
+#   ./smoke-test.sh                     # сквозная проверка на этом инстансе
+#
+# Порт сервиса привязан к loopback: наружу трафик идёт ТОЛЬКО через reverse
+# proxy контура (аутентификация /console, TLS) — см. RUNBOOK.md.
+
+name: memory-service
+
+services:
+  memory-db:
+    build: ../infra/memory-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?задайте в .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-company_brain}
+    volumes:
+      - memory-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [memory]
+
+  memory-service:
+    build:
+      # Контекст — корень суперпроекта: рядом лежит platform-auth-sdk (path-зависимость
+      # для проверки IAM-токенов, ADR-018). Файл Dockerfile.dockerignore ограничивает
+      # контекст только memory-service/ и platform-auth-sdk/.
+      context: ../..
+      dockerfile: memory-service/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      memory-db:
+        condition: service_healthy
+    environment:
+      CB_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@memory-db:5432/${POSTGRES_DB:-company_brain}
+      # Доступ потребителей по HTTP: базовый токен + (опц.) токены с допуском к ПДн.
+      CB_SERVER_API_KEY: ${CB_SERVER_API_KEY:?задайте в .env}
+      CB_SERVER_API_KEYS_PII: ${CB_SERVER_API_KEYS_PII:-}
+      CB_API_KEYS: ${CB_API_KEYS:-}
+      # Access token IAM (ADR-018): второй способ рядом со статическими ключами.
+      CB_IAM_ENABLED: ${CB_IAM_ENABLED:-false}
+      CB_IAM_ISSUER: ${CB_IAM_ISSUER:-}
+      CB_IAM_JWKS_URL: ${CB_IAM_JWKS_URL:-}
+      CB_IAM_AUDIENCE: ${CB_IAM_AUDIENCE:-memory-service}
+      CB_IAM_LEEWAY_SECONDS: ${CB_IAM_LEEWAY_SECONDS:-5}
+      CB_PII_PROTECTION: ${CB_PII_PROTECTION:-true}
+      CB_DEFAULT_NAMESPACE: ${CB_DEFAULT_NAMESPACE:-main}
+      # Эмбеддинги/LLM: fake/echo работают полностью оффлайн (без внешних ключей).
+      CB_EMBEDDING_PROVIDER: ${CB_EMBEDDING_PROVIDER:-fake}
+      CB_EMBEDDING_BASE_URL: ${CB_EMBEDDING_BASE_URL:-}
+      CB_EMBEDDING_API_KEY: ${CB_EMBEDDING_API_KEY:-}
+      CB_EMBEDDING_MODEL: ${CB_EMBEDDING_MODEL:-text-embedding-3-small}
+      CB_LLM_PROVIDER: ${CB_LLM_PROVIDER:-echo}
+      CB_LLM_BASE_URL: ${CB_LLM_BASE_URL:-}
+      CB_LLM_API_KEY: ${CB_LLM_API_KEY:-}
+      # Memory Console (админ-контур). Включать только за reverse proxy c auth.
+      CB_CONSOLE_ENABLED: ${CB_CONSOLE_ENABLED:-false}
+      CB_CONSOLE_NAMESPACES: ${CB_CONSOLE_NAMESPACES:-}
+    ports:
+      # Только loopback хоста: сервис не должен быть доступен из сети напрямую.
+      - "127.0.0.1:${MEMORY_SERVICE_PORT:-8077}:8077"
+    networks: [memory]
+
+volumes:
+  memory-db-data:
+
+networks:
+  memory:

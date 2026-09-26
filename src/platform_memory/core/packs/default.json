@@ -1,0 +1,129 @@
+{
+  "name": "default",
+  "version": "1",
+  "description": "Пакет по умолчанию: бизнес-онтология vault (схемы schemas/*.schema.json vault), бывший код core/ontology.py. Виды question и project синтетические — их создаёт ingest поверх vault.",
+  "kinds": [
+    {
+      "kind": "legal_entity"
+    },
+    {
+      "kind": "owner_profile"
+    },
+    {
+      "kind": "contract"
+    },
+    {
+      "kind": "product"
+    },
+    {
+      "kind": "product_doc"
+    },
+    {
+      "kind": "decision",
+      "naturalKey": {
+        "type": "string",
+        "pattern": "^BIZ-\\d{3,}$"
+      },
+      "idPatterns": [
+        "\\bBIZ-\\d{3,}\\b"
+      ]
+    },
+    {
+      "kind": "decisions_index"
+    },
+    {
+      "kind": "task",
+      "naturalKey": {
+        "type": "string",
+        "pattern": "^T-\\d{3,}$"
+      },
+      "idPatterns": [
+        "\\bT-\\d{3,}\\b"
+      ]
+    },
+    {
+      "kind": "open_questions"
+    },
+    {
+      "kind": "meeting",
+      "naturalKey": {
+        "type": "string",
+        "pattern": "^M-\\d{3,}$"
+      },
+      "idPatterns": [
+        "\\bM-\\d{3,}\\b"
+      ]
+    },
+    {
+      "kind": "outgoing"
+    },
+    {
+      "kind": "pricing"
+    },
+    {
+      "kind": "cashflow"
+    },
+    {
+      "kind": "unit_economics"
+    },
+    {
+      "kind": "goal"
+    },
+    {
+      "kind": "overview"
+    },
+    {
+      "kind": "licensing_strategy"
+    },
+    {
+      "kind": "pilot_tracker"
+    },
+    {
+      "kind": "tax_residency"
+    },
+    {
+      "kind": "tax_return"
+    },
+    {
+      "kind": "question",
+      "naturalKey": {
+        "type": "string",
+        "pattern": "^Q-\\d{3,}$"
+      },
+      "idPatterns": [
+        "\\bQ-\\d{3,}\\b"
+      ]
+    },
+    {
+      "kind": "project"
+    }
+  ],
+  "relations": [
+    {
+      "relation": "links_to",
+      "fromKinds": [],
+      "toKinds": [],
+      "temporal": false
+    },
+    {
+      "relation": "superseded_by",
+      "fromKinds": [],
+      "toKinds": [],
+      "temporal": false
+    },
+    {
+      "relation": "part_of_project",
+      "fromKinds": [],
+      "toKinds": [
+        "project"
+      ],
+      "temporal": false
+    },
+    {
+      "relation": "mentions",
+      "fromKinds": [],
+      "toKinds": [],
+      "temporal": false
+    }
+  ]
+}

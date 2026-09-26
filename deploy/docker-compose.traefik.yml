@@ -1,0 +1,32 @@
+# Опциональный override для публикации API через уже существующий Traefik.
+# Базовый docker-compose.yml сохраняет сервис на loopback хоста. Этот файл
+# подключает только memory-service к внешней docker-сети proxy и не публикует БД.
+# Наружу выходят /api/brain/*, /api/memory/* (Context Engine, ADR-016) и /healthz;
+# /console и /demo этим правилом НЕ публикуются (см. RUNBOOK.md).
+#
+# Пример:
+#   TRAEFIK_NETWORK=n8n_default \
+#   CB_PUBLIC_HOST=memory.example.com \
+#   CB_PUBLIC_PATH_PREFIX=/memory \
+#   docker compose -f docker-compose.yml -f docker-compose.traefik.yml up -d --build
+
+services:
+  memory-service:
+    networks: [memory, edge]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:?задайте сеть Traefik}"
+      - "traefik.http.routers.memory-service.rule=Host(`${CB_PUBLIC_HOST:?задайте публичный host}`) && (PathPrefix(`${CB_PUBLIC_PATH_PREFIX:?задайте path prefix}/api/brain`) || PathPrefix(`${CB_PUBLIC_PATH_PREFIX:?задайте path prefix}/api/memory`) || Path(`${CB_PUBLIC_PATH_PREFIX:?задайте path prefix}/healthz`))"
+      - "traefik.http.routers.memory-service.entrypoints=websecure"
+      - "traefik.http.routers.memory-service.tls=true"
+      - "traefik.http.routers.memory-service.middlewares=memory-service-strip@docker,memory-service-security@docker"
+      - "traefik.http.services.memory-service.loadbalancer.server.port=8077"
+      - "traefik.http.middlewares.memory-service-strip.stripprefix.prefixes=${CB_PUBLIC_PATH_PREFIX:?задайте path prefix}"
+      - "traefik.http.middlewares.memory-service-security.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.memory-service-security.headers.frameDeny=true"
+      - "traefik.http.middlewares.memory-service-security.headers.referrerPolicy=no-referrer"
+
+networks:
+  edge:
+    external: true
+    name: ${TRAEFIK_NETWORK:?задайте сеть Traefik}

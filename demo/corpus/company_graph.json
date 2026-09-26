@@ -1,0 +1,1952 @@
+{
+ "nodes": [
+  {
+   "key": "person:maya-okonkwo",
+   "type": "person",
+   "title": "Maya Okonkwo",
+   "subtitle": "Founder & CEO",
+   "body": "Founder and CEO of Acme; sets company strategy and owns fundraising. Expertise: company strategy, sales leadership, procurement and vendor contracts."
+  },
+  {
+   "key": "person:raj-patel",
+   "type": "person",
+   "title": "Raj Patel",
+   "subtitle": "Head of Platform",
+   "body": "Head of Platform; leads the engineering org behind Acme's core services. Expertise: public API design, remote-access infrastructure, backend architecture."
+  },
+  {
+   "key": "person:elena-vasquez",
+   "type": "person",
+   "title": "Elena Vasquez",
+   "subtitle": "Head of Security (CISO)",
+   "body": "Head of Security and CISO; owns the security program end to end. Expertise: incident response, data security, authentication systems."
+  },
+  {
+   "key": "person:tom-becker",
+   "type": "person",
+   "title": "Tom Becker",
+   "subtitle": "Head of Product",
+   "body": "Head of Product; owns roadmap and product-market fit. Expertise: API product strategy, data governance, customer discovery."
+  },
+  {
+   "key": "person:grace-liu",
+   "type": "person",
+   "title": "Grace Liu",
+   "subtitle": "Head of Sales",
+   "body": "Head of Sales; runs revenue and go-to-market. Expertise: enterprise sales, customer support strategy, pipeline management."
+  },
+  {
+   "key": "person:samuel-adeyemi",
+   "type": "person",
+   "title": "Samuel Adeyemi",
+   "subtitle": "Head of People & Ops",
+   "body": "Head of People & Ops; owns HR, hiring and internal operations. Expertise: HR policy, employee onboarding, expenses & travel, procurement."
+  },
+  {
+   "key": "person:nina-hansen",
+   "type": "person",
+   "title": "Nina Hansen",
+   "subtitle": "Backend Engineer",
+   "body": "Backend engineer on the Platform team building core services. Expertise: API implementation, authentication and session handling."
+  },
+  {
+   "key": "person:carlos-mendez",
+   "type": "person",
+   "title": "Carlos Mendez",
+   "subtitle": "Infrastructure Engineer",
+   "body": "Infrastructure engineer on the Platform team running Acme's fleet. Expertise: remote-access infrastructure, device management and fleet provisioning."
+  },
+  {
+   "key": "person:priya-sharma",
+   "type": "person",
+   "title": "Priya Sharma",
+   "subtitle": "Security Engineer",
+   "body": "Security engineer on the Security team hardening access. Expertise: access provisioning, authentication and identity controls."
+  },
+  {
+   "key": "person:jonas-weber",
+   "type": "person",
+   "title": "Jonas Weber",
+   "subtitle": "Incident Response Analyst",
+   "body": "Incident response analyst on the Security team. Expertise: incident response, data security and breach investigation."
+  },
+  {
+   "key": "person:aisha-khan",
+   "type": "person",
+   "title": "Aisha Khan",
+   "subtitle": "Product Manager",
+   "body": "Product manager on the Product team owning the API surface. Expertise: API product management, data governance and privacy requirements."
+  },
+  {
+   "key": "person:daniel-cohen",
+   "type": "person",
+   "title": "Daniel Cohen",
+   "subtitle": "Account Executive",
+   "body": "Account executive on the Sales team closing enterprise deals. Expertise: sales, procurement and contract negotiation."
+  },
+  {
+   "key": "person:mei-tanaka",
+   "type": "person",
+   "title": "Mei Tanaka",
+   "subtitle": "Support Lead",
+   "body": "Support and customer-success lead on the Sales team. Expertise: customer support, customer onboarding and account health."
+  },
+  {
+   "key": "person:oliver-schmidt",
+   "type": "person",
+   "title": "Oliver Schmidt",
+   "subtitle": "People Ops Specialist",
+   "body": "People Ops specialist on the People & Ops team. Expertise: HR policy administration, expenses & travel processing."
+  },
+  {
+   "key": "team:platform",
+   "type": "team",
+   "title": "Platform",
+   "subtitle": "Engineering",
+   "body": "Build and operate the core services, APIs and infrastructure that power the Acme product."
+  },
+  {
+   "key": "team:security",
+   "type": "team",
+   "title": "Security",
+   "subtitle": "Security & Trust",
+   "body": "Protect Acme's systems and customer data through strong access controls, monitoring and incident response."
+  },
+  {
+   "key": "team:product",
+   "type": "team",
+   "title": "Product",
+   "subtitle": "Product Management",
+   "body": "Define what Acme builds by turning customer needs into a coherent product roadmap."
+  },
+  {
+   "key": "team:sales",
+   "type": "team",
+   "title": "Sales",
+   "subtitle": "Go-to-Market",
+   "body": "Grow revenue by winning new customers and keeping them successful and supported."
+  },
+  {
+   "key": "team:people-ops",
+   "type": "team",
+   "title": "People & Ops",
+   "subtitle": "People & Operations",
+   "body": "Hire, support and enable Acme's people while running smooth internal operations."
+  },
+  {
+   "key": "product:atlas-identity",
+   "type": "product",
+   "title": "Atlas",
+   "subtitle": "Identity & access management",
+   "body": "Atlas is Acme's identity and access management product: single sign-on, multi-factor authentication, and automated user lifecycle provisioning. It is the system of record for who can access what across the Acme suite."
+  },
+  {
+   "key": "product:sentry-endpoint",
+   "type": "product",
+   "title": "Sentry",
+   "subtitle": "Endpoint & zero-trust access",
+   "body": "Sentry manages the laptop and device fleet and provides zero-trust remote access to internal applications. It continuously evaluates device posture and gates access based on user role and compliance state."
+  },
+  {
+   "key": "product:flowdesk-ops",
+   "type": "product",
+   "title": "FlowDesk",
+   "subtitle": "Operations, expenses & procurement",
+   "body": "FlowDesk is Acme's back-office operations suite covering expenses, travel, and procurement. It auto-categorizes spend, routes approvals, and matches invoices to purchase orders."
+  },
+  {
+   "key": "doc:sso-setup-guide",
+   "type": "product_doc",
+   "title": "SSO Setup Guide",
+   "subtitle": "Atlas",
+   "body": "Configure single sign-on by registering Acme as a SAML 2.0 or OIDC application in your identity provider. Copy the Atlas ACS URL and entity ID into the provider, then upload the provider's metadata XML back into Atlas. SSO enforcement can be scoped per team, and break-glass local accounts remain available for administrators."
+  },
+  {
+   "key": "doc:mfa-policy",
+   "type": "product_doc",
+   "title": "MFA Policy",
+   "subtitle": "Atlas",
+   "body": "Multi-factor authentication is required for all administrator and finance roles. Atlas supports TOTP authenticator apps, hardware security keys (FIDO2/WebAuthn), and push approval. Users have a 14-day grace period to enroll a second factor before access is blocked."
+  },
+  {
+   "key": "doc:api-reference",
+   "type": "product_doc",
+   "title": "API Reference",
+   "subtitle": "Atlas",
+   "body": "The Acme REST API authenticates with a Bearer token scoped to a single workspace. Endpoints are versioned under /v1 and return JSON with cursor-based pagination. Rate limits are 600 requests per minute per token, and webhooks deliver near-real-time events for provisioning and device changes."
+  },
+  {
+   "key": "doc:vpn-remote-access",
+   "type": "product_doc",
+   "title": "Zero-Trust Remote Access",
+   "subtitle": "Sentry",
+   "body": "Remote employees connect through the Sentry zero-trust gateway rather than a legacy VPN concentrator. Access to internal applications is granted per-request based on device posture and user role. Sessions are re-evaluated every 15 minutes and revoked automatically if the device falls out of compliance."
+  },
+  {
+   "key": "doc:device-enrollment",
+   "type": "product_doc",
+   "title": "Device Enrollment Guide",
+   "subtitle": "Sentry",
+   "body": "Enroll a laptop by installing the Sentry agent and signing in with your Atlas credentials. Enrollment records the device serial number, disk-encryption state, and OS patch level. Devices that fail the posture check are quarantined until they are remediated."
+  },
+  {
+   "key": "doc:incident-runbook",
+   "type": "product_doc",
+   "title": "Incident Response Runbook",
+   "subtitle": "Sentry",
+   "body": "When an alert fires, the on-call responder acknowledges it in the console within 15 minutes and opens an incident channel. Classify severity, contain the affected systems, and record a timeline of actions taken. A blameless post-mortem is required for every Sev-1 and Sev-2 incident within five business days."
+  },
+  {
+   "key": "doc:expense-policy",
+   "type": "product_doc",
+   "title": "Expense Policy",
+   "subtitle": "FlowDesk",
+   "body": "Employees submit expenses within 30 days of purchase with an itemized receipt attached. Travel over $500 requires manager pre-approval, and any personal charges must be flagged for reimbursement to the company. FlowDesk auto-categorizes line items and routes anything above the department threshold for a second approval."
+  },
+  {
+   "key": "doc:procurement-workflow",
+   "type": "product_doc",
+   "title": "Procurement Workflow",
+   "subtitle": "FlowDesk",
+   "body": "A new vendor purchase starts with a procurement request that captures the budget line, business justification, and preferred supplier. Requests above $10,000 route to finance and security review before a purchase order is issued. FlowDesk tracks the request from approval through invoice matching."
+  },
+  {
+   "key": "project:sso-rollout",
+   "type": "project",
+   "title": "SSO Rollout",
+   "body": "Goal: ship SAML and OIDC single sign-on across all three products with per-team enforcement. Status: in progress — Atlas is GA, Sentry is in beta, FlowDesk is scoped for next quarter."
+  },
+  {
+   "key": "project:mfa-hardening",
+   "type": "project",
+   "title": "MFA Hardening",
+   "body": "Goal: make phishing-resistant MFA (WebAuthn) the default for all privileged roles. Status: in progress — WebAuthn support shipped, org-wide enforcement rollout pending."
+  },
+  {
+   "key": "project:device-fleet-mdm",
+   "type": "project",
+   "title": "Device Fleet MDM",
+   "body": "Goal: manage the full laptop fleet through Sentry with automated posture and disk-encryption checks. Status: on track — roughly 70% of devices enrolled."
+  },
+  {
+   "key": "project:zero-trust-remote-access",
+   "type": "project",
+   "title": "Zero-Trust Remote Access",
+   "body": "Goal: replace the legacy VPN concentrator with the Sentry zero-trust gateway. Status: piloting with two customers; general rollout in planning."
+  },
+  {
+   "key": "project:incident-response-automation",
+   "type": "project",
+   "title": "Incident Response Automation",
+   "body": "Goal: automate alert triage and incident-channel creation to cut mean time to respond. Status: in progress — runbook automation running in staging."
+  },
+  {
+   "key": "project:expense-redesign",
+   "type": "project",
+   "title": "Expense Flow Redesign",
+   "body": "Goal: rebuild the FlowDesk expense submission flow with auto-categorization and mobile receipt capture. Status: design complete, build starting this sprint."
+  },
+  {
+   "key": "project:procurement-integration",
+   "type": "project",
+   "title": "Procurement ERP Integration",
+   "body": "Goal: integrate procurement requests with the finance ERP for automated purchase-order issuance. Status: blocked on ERP sandbox access."
+  },
+  {
+   "key": "project:onboarding-automation",
+   "type": "project",
+   "title": "New-Hire Onboarding Automation",
+   "body": "Goal: auto-provision accounts, devices, and role-based access on day one for every new hire. Status: in progress — dependent on the SSO rollout."
+  },
+  {
+   "key": "customer:northwind-logistics",
+   "type": "customer",
+   "title": "Northwind Logistics",
+   "subtitle": "Logistics / mid-market",
+   "body": "Freight and warehousing operator; mid-market, roughly 1,200 employees across distributed depots."
+  },
+  {
+   "key": "customer:vertex-health",
+   "type": "customer",
+   "title": "Vertex Health",
+   "subtitle": "Healthcare / enterprise",
+   "body": "Multi-site healthcare provider; enterprise segment with strict data-residency and compliance requirements."
+  },
+  {
+   "key": "customer:brightpay-fintech",
+   "type": "customer",
+   "title": "BrightPay",
+   "subtitle": "Fintech / mid-market",
+   "body": "Digital payments and expense fintech; mid-market, fast-growing engineering-heavy org."
+  },
+  {
+   "key": "customer:cedar-retail",
+   "type": "customer",
+   "title": "Cedar Retail Group",
+   "subtitle": "Retail / enterprise",
+   "body": "National retail chain; enterprise segment with a large seasonal and store-floor workforce."
+  },
+  {
+   "key": "customer:orbital-media",
+   "type": "customer",
+   "title": "Orbital Media",
+   "subtitle": "Media & advertising / SMB",
+   "body": "Creative and advertising agency; small-to-mid business with a mostly remote workforce."
+  },
+  {
+   "key": "customer:granite-manufacturing",
+   "type": "customer",
+   "title": "Granite Manufacturing",
+   "subtitle": "Industrial manufacturing / enterprise",
+   "body": "Industrial equipment manufacturer; enterprise segment with heavy procurement and vendor management needs."
+  },
+  {
+   "key": "BIZ-101",
+   "type": "decision",
+   "title": "Adopt SAML SSO across all internal apps",
+   "subtitle": "Single identity provider via Atlas Identity",
+   "body": "We will standardize on SAML-based single sign-on through Atlas Identity as the sole identity provider for internal applications. Consolidating logins reduces credential sprawl and gives us one place to enforce access policy. Per-app local accounts will be migrated and disabled once SSO coverage reaches 95%."
+  },
+  {
+   "key": "BIZ-102",
+   "type": "decision",
+   "title": "Enforce MFA on all admin accounts",
+   "subtitle": "TOTP plus WebAuthn required",
+   "body": "All administrative and privileged accounts must enroll in multi-factor authentication using TOTP with a WebAuthn hardware-key option. Admin credentials are the highest-value target and password-only access is no longer acceptable. Non-compliant accounts will be locked out after a two-week grace period."
+  },
+  {
+   "key": "BIZ-103",
+   "type": "decision",
+   "title": "Mandatory MDM enrollment for all laptops",
+   "subtitle": "Managed via Sentry Endpoint",
+   "body": "Every company laptop must be enrolled in mobile device management through Sentry Endpoint before it can access corporate resources. This gives us inventory, patch enforcement, and remote-wipe for lost devices. Unenrolled devices will be blocked at the access layer."
+  },
+  {
+   "key": "BIZ-104",
+   "type": "decision",
+   "title": "Replace legacy VPN with zero-trust broker",
+   "subtitle": "Per-session, identity-aware access",
+   "body": "We will retire the flat legacy VPN in favor of a zero-trust access broker that grants per-application, identity-aware sessions. The old VPN gives implicit network-wide trust once connected, which is our biggest lateral-movement risk. Rollout is phased by team, starting with engineering."
+  },
+  {
+   "key": "BIZ-105",
+   "type": "decision",
+   "title": "Data retention policy: logs 90 days, PII 24 months",
+   "subtitle": "Tiered retention by data class",
+   "body": "Operational logs are retained for 90 days and personally identifiable information for a maximum of 24 months, after which records are purged or anonymized. Indefinite retention increases both breach blast-radius and compliance exposure. Exceptions require documented legal-hold approval from data governance."
+  },
+  {
+   "key": "BIZ-106",
+   "type": "decision",
+   "title": "URL-based API versioning with 6-month deprecation window",
+   "subtitle": "/v1, /v2 path prefixes",
+   "body": "Public APIs will use URL-path versioning (/v1, /v2) with a guaranteed six-month deprecation window before any version is removed. Path-based versions are explicit and easy for integrators to reason about compared to header negotiation. Deprecations are announced in the changelog and via response headers."
+  },
+  {
+   "key": "BIZ-107",
+   "type": "decision",
+   "title": "Automate incident-response runbooks in Flowdesk Ops",
+   "subtitle": "Codified detection-to-remediation flows",
+   "body": "Incident-response runbooks will be codified and automated inside Flowdesk Ops so that common detections trigger consistent, auditable remediation steps. Manual, tribal-knowledge response is too slow and varies by on-call engineer. Every automated action is logged for post-incident review."
+  },
+  {
+   "key": "BIZ-108",
+   "type": "decision",
+   "title": "Blameless SEV-1 post-mortem process",
+   "subtitle": "Mandatory review within 5 business days",
+   "body": "Every SEV-1 security incident requires a blameless post-mortem completed within five business days, focused on systemic fixes rather than individual fault. A no-blame culture surfaces the real causes and improves reporting speed. Action items are tracked to closure and reviewed monthly."
+  },
+  {
+   "key": "BIZ-109",
+   "type": "decision",
+   "title": "Integrate procurement with ERP for PO approvals",
+   "subtitle": "Automated purchase-order routing",
+   "body": "Procurement will be integrated directly with the ERP so purchase-order approvals route automatically based on amount and cost center. Manual email approvals cause delays and leave a weak audit trail. Thresholds and approver chains are configured centrally by finance ops."
+  },
+  {
+   "key": "BIZ-110",
+   "type": "decision",
+   "title": "Expense redesign: auto-categorization and travel per-diem",
+   "subtitle": "Fewer manual line items",
+   "body": "The expense workflow is redesigned to auto-categorize card transactions and apply standardized per-diem rates for travel instead of itemized meal receipts. This cuts submission time and reviewer load while improving policy consistency. Per-diem rates are maintained per region and reviewed twice a year."
+  },
+  {
+   "key": "BIZ-111",
+   "type": "decision",
+   "title": "Day-1 access provisioning via Atlas Identity groups",
+   "subtitle": "Role-driven onboarding automation",
+   "body": "New hires receive their baseline application access automatically on day one, driven by role-mapped Atlas Identity groups from the HR system. Manual ticket-based provisioning left people idle and access inconsistent. Role-to-group mappings are owned by each department lead."
+  },
+  {
+   "key": "BIZ-112",
+   "type": "decision",
+   "title": "Remote-work eligibility and equipment stipend policy",
+   "subtitle": "Role-based remote tiers",
+   "body": "We formalize remote-work eligibility into role-based tiers and provide a one-time home-office equipment stipend for eligible employees. Ad-hoc arrangements created fairness and budgeting inconsistencies. Eligibility and stipend amounts are documented in the HR handbook."
+  },
+  {
+   "key": "BIZ-113",
+   "type": "decision",
+   "title": "Deprecate password-only login by Q3",
+   "subtitle": "Phased move to SSO plus MFA",
+   "body": "Password-only authentication will be fully deprecated by the end of Q3 in favor of SSO with mandatory MFA. Standalone passwords remain the weakest link even with complexity rules. The cutover is phased by application criticality with fallback support during migration."
+  },
+  {
+   "key": "BIZ-114",
+   "type": "decision",
+   "title": "Enforce full-disk encryption on managed devices",
+   "subtitle": "Verified through Sentry Endpoint",
+   "body": "Full-disk encryption is mandatory on all MDM-managed devices and its status is continuously verified through Sentry Endpoint. An unencrypted lost or stolen laptop is a reportable data-exposure event. Devices reporting disabled encryption are automatically quarantined from access."
+  },
+  {
+   "key": "BIZ-115",
+   "type": "decision",
+   "title": "Quarterly least-privilege access reviews",
+   "subtitle": "Role-based access recertification",
+   "body": "Access grants are reviewed quarterly against a least-privilege baseline, with managers recertifying each report's roles. Access tends to accumulate over time as people change teams, creating standing risk. Grants not recertified within the window are automatically revoked."
+  },
+  {
+   "key": "BIZ-116",
+   "type": "decision",
+   "title": "Encrypt data at rest with KMS-managed keys",
+   "subtitle": "Centralized key lifecycle",
+   "body": "All persistent data stores must be encrypted at rest using centrally managed KMS keys with enforced rotation. Application- or disk-level ad-hoc encryption made key custody and rotation unauditable. Key access is scoped per service and logged for governance review."
+  },
+  {
+   "key": "BIZ-117",
+   "type": "decision",
+   "title": "Sales-to-support handoff SLA for enterprise",
+   "subtitle": "4-hour first response",
+   "body": "Enterprise accounts handed from sales to support get a guaranteed four-hour first-response SLA on their initial tickets. Slow early responses after signing eroded trust with our largest customers. Handoffs include an account context packet so support avoids re-discovery."
+  },
+  {
+   "key": "BIZ-118",
+   "type": "decision",
+   "title": "Schedule v1 API deprecation with migration guide",
+   "subtitle": "Client-facing sunset plan",
+   "body": "Legacy /v1 API endpoints are placed on a published sunset schedule accompanied by a client migration guide to /v2. Keeping two major versions indefinitely doubles our maintenance and support surface. Integrators receive deprecation headers and proactive support outreach before cutoff."
+  },
+  {
+   "key": "M-01",
+   "type": "meeting",
+   "title": "Identity & Access review",
+   "subtitle": "SSO, MFA, password deprecation",
+   "body": "Reviewed the identity roadmap: standardizing on SAML SSO, enforcing MFA on admin accounts, and setting a timeline to retire password-only login."
+  },
+  {
+   "key": "M-02",
+   "type": "meeting",
+   "title": "Endpoint & Network security sync",
+   "subtitle": "MDM, VPN replacement, disk encryption",
+   "body": "Aligned on mandatory MDM enrollment, replacing the legacy VPN with a zero-trust broker, and enforcing full-disk encryption on managed devices."
+  },
+  {
+   "key": "M-03",
+   "type": "meeting",
+   "title": "Data governance council",
+   "subtitle": "Retention and encryption at rest",
+   "body": "Set tiered data-retention windows and agreed to encrypt all data at rest under centrally managed KMS keys."
+  },
+  {
+   "key": "M-04",
+   "type": "meeting",
+   "title": "API platform planning",
+   "subtitle": "Versioning and deprecation",
+   "body": "Decided on URL-based API versioning with a six-month deprecation window and scheduled the v1 sunset with a client migration guide."
+  },
+  {
+   "key": "M-05",
+   "type": "meeting",
+   "title": "Incident response tabletop",
+   "subtitle": "Runbooks and post-mortems",
+   "body": "Walked through a SEV-1 scenario; agreed to automate response runbooks in Flowdesk Ops and to require blameless post-mortems."
+  },
+  {
+   "key": "M-06",
+   "type": "meeting",
+   "title": "Finance ops review",
+   "subtitle": "Procurement and expenses",
+   "body": "Reviewed finance workflows and approved ERP-integrated PO approvals plus the expense redesign with travel per-diems."
+  },
+  {
+   "key": "M-07",
+   "type": "meeting",
+   "title": "People ops planning",
+   "subtitle": "Onboarding and remote policy",
+   "body": "Planned day-1 automated access provisioning for new hires and formalized remote-work eligibility and the equipment stipend."
+  },
+  {
+   "key": "M-08",
+   "type": "meeting",
+   "title": "Quarterly access & GTM sync",
+   "subtitle": "Access reviews and support SLA",
+   "body": "Covered quarterly least-privilege access recertification and set the four-hour enterprise sales-to-support handoff SLA."
+  },
+  {
+   "key": "T-201",
+   "type": "task",
+   "title": "Set up the SAML IdP for SSO",
+   "subtitle": "project:sso-rollout",
+   "body": "Stand up and configure the corporate SAML/OIDC identity provider as the central authentication point for all Acme applications."
+  },
+  {
+   "key": "T-202",
+   "type": "task",
+   "title": "Connect the billing app to SSO",
+   "subtitle": "project:sso-rollout",
+   "body": "Migrate the first business application (billing) to SSO login and disable its local login form."
+  },
+  {
+   "key": "T-203",
+   "type": "task",
+   "title": "Enforce mandatory TOTP for admins",
+   "subtitle": "project:mfa-hardening",
+   "body": "Make a second factor (TOTP) mandatory for all administrator accounts and block sign-in without it."
+  },
+  {
+   "key": "T-204",
+   "type": "task",
+   "title": "Issue hardware keys to leadership",
+   "subtitle": "project:mfa-hardening",
+   "body": "Hand out FIDO2 keys to senior management and set up phishing-resistant authentication for them instead of app codes."
+  },
+  {
+   "key": "T-205",
+   "type": "task",
+   "title": "Enroll corporate laptops in MDM",
+   "subtitle": "project:device-fleet-mdm",
+   "body": "Bulk-enroll work laptops in the device management system with automatic profile installation."
+  },
+  {
+   "key": "T-206",
+   "type": "task",
+   "title": "Define a baseline device compliance policy",
+   "subtitle": "project:device-fleet-mdm",
+   "body": "Set a baseline of device requirements (disk encryption, current updates, screen lock) and turn on compliance checking."
+  },
+  {
+   "key": "T-207",
+   "type": "task",
+   "title": "Deploy the zero-trust access proxy",
+   "subtitle": "project:zero-trust-remote-access",
+   "body": "Install and configure the remote-access proxy that verifies identity and device posture before granting access to internal services."
+  },
+  {
+   "key": "T-208",
+   "type": "task",
+   "title": "Decommission the legacy VPN",
+   "subtitle": "project:zero-trust-remote-access",
+   "body": "Move remaining users to zero-trust access and shut down the old VPN gateway."
+  },
+  {
+   "key": "T-209",
+   "type": "task",
+   "title": "Build the phishing response playbook",
+   "subtitle": "project:incident-response-automation",
+   "body": "Formalize and automate the phishing incident workflow: mailbox isolation, session reset, and notification."
+  },
+  {
+   "key": "T-210",
+   "type": "task",
+   "title": "Wire SIEM alerts into automation",
+   "subtitle": "project:incident-response-automation",
+   "body": "Set up ingestion of SIEM alerts and automatic triggering of the matching response playbooks."
+  },
+  {
+   "key": "T-211",
+   "type": "task",
+   "title": "Design the new expense approval flow",
+   "subtitle": "project:expense-redesign",
+   "body": "Define and roll out an updated expense submission and approval workflow with amount thresholds and auto-escalation."
+  },
+  {
+   "key": "T-212",
+   "type": "task",
+   "title": "Auto-reconcile corporate card transactions",
+   "subtitle": "project:expense-redesign",
+   "body": "Match corporate card transactions against submitted expense reports and flag discrepancies."
+  },
+  {
+   "key": "T-213",
+   "type": "task",
+   "title": "Integrate the vendor catalog via API",
+   "subtitle": "project:procurement-integration",
+   "body": "Connect the external vendor catalog over an API so line items flow into the procurement system without manual entry."
+  },
+  {
+   "key": "T-214",
+   "type": "task",
+   "title": "Configure PO approval routing",
+   "subtitle": "project:procurement-integration",
+   "body": "Implement rules that route purchase requests to the right approvers based on amount and category."
+  },
+  {
+   "key": "T-215",
+   "type": "task",
+   "title": "Auto-provision new-hire accounts",
+   "subtitle": "project:onboarding-automation",
+   "body": "Automatically create accounts and assign access for new hires via SSO/IdP based on their role from the HR system."
+  },
+  {
+   "key": "T-216",
+   "type": "task",
+   "title": "New-hire first-day checklist",
+   "subtitle": "project:onboarding-automation",
+   "body": "Assemble an automated welcome checklist: device handout, access, intro meetings, and required materials."
+  },
+  {
+   "key": "Q-01",
+   "type": "question",
+   "title": "Keep a password fallback during the SSO migration?",
+   "subtitle": "about project:sso-rollout",
+   "body": "Should we keep local password login as a fallback during the SSO migration, or do a hard cutover right away?"
+  },
+  {
+   "key": "Q-02",
+   "type": "question",
+   "title": "Hardware keys or authenticator apps for everyone?",
+   "subtitle": "about project:mfa-hardening",
+   "body": "Should we scale FIDO2 keys to the whole company, or are TOTP apps enough for regular employees?"
+  },
+  {
+   "key": "Q-03",
+   "type": "question",
+   "title": "What is the deadline to fully retire the VPN?",
+   "subtitle": "about project:zero-trust-remote-access",
+   "body": "By when can we realistically shut down the legacy VPN entirely, given contractors and legacy systems without zero-trust support?"
+  },
+  {
+   "key": "Q-04",
+   "type": "question",
+   "title": "Who owns after-hours on-call?",
+   "subtitle": "about project:incident-response-automation",
+   "body": "Who is responsible for on-call incident response outside business hours, and how are rotation and compensation handled?"
+  },
+  {
+   "key": "Q-05",
+   "type": "question",
+   "title": "Per-diem or actual reimbursement for travel?",
+   "subtitle": "about project:expense-redesign",
+   "body": "Should we move to fixed per-diems for business trips, or keep reimbursing actual receipted expenses?"
+  },
+  {
+   "key": "Q-06",
+   "type": "question",
+   "title": "One preferred vendor or a multi-vendor catalog?",
+   "subtitle": "about project:procurement-integration",
+   "body": "Standardize on a single preferred vendor for discounts, or keep a multi-vendor catalog for flexibility?"
+  }
+ ],
+ "edges": [
+  {
+   "type": "reports_to",
+   "src": "person:raj-patel",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:elena-vasquez",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:tom-becker",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:grace-liu",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:samuel-adeyemi",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:nina-hansen",
+   "dst": "person:raj-patel"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:carlos-mendez",
+   "dst": "person:raj-patel"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:priya-sharma",
+   "dst": "person:elena-vasquez"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:jonas-weber",
+   "dst": "person:elena-vasquez"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:aisha-khan",
+   "dst": "person:tom-becker"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:daniel-cohen",
+   "dst": "person:grace-liu"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:mei-tanaka",
+   "dst": "person:grace-liu"
+  },
+  {
+   "type": "reports_to",
+   "src": "person:oliver-schmidt",
+   "dst": "person:samuel-adeyemi"
+  },
+  {
+   "type": "leads",
+   "src": "person:raj-patel",
+   "dst": "team:platform"
+  },
+  {
+   "type": "leads",
+   "src": "person:elena-vasquez",
+   "dst": "team:security"
+  },
+  {
+   "type": "leads",
+   "src": "person:tom-becker",
+   "dst": "team:product"
+  },
+  {
+   "type": "leads",
+   "src": "person:grace-liu",
+   "dst": "team:sales"
+  },
+  {
+   "type": "leads",
+   "src": "person:samuel-adeyemi",
+   "dst": "team:people-ops"
+  },
+  {
+   "type": "member_of",
+   "src": "person:raj-patel",
+   "dst": "team:platform"
+  },
+  {
+   "type": "member_of",
+   "src": "person:nina-hansen",
+   "dst": "team:platform"
+  },
+  {
+   "type": "member_of",
+   "src": "person:carlos-mendez",
+   "dst": "team:platform"
+  },
+  {
+   "type": "member_of",
+   "src": "person:elena-vasquez",
+   "dst": "team:security"
+  },
+  {
+   "type": "member_of",
+   "src": "person:priya-sharma",
+   "dst": "team:security"
+  },
+  {
+   "type": "member_of",
+   "src": "person:jonas-weber",
+   "dst": "team:security"
+  },
+  {
+   "type": "member_of",
+   "src": "person:tom-becker",
+   "dst": "team:product"
+  },
+  {
+   "type": "member_of",
+   "src": "person:aisha-khan",
+   "dst": "team:product"
+  },
+  {
+   "type": "member_of",
+   "src": "person:grace-liu",
+   "dst": "team:sales"
+  },
+  {
+   "type": "member_of",
+   "src": "person:daniel-cohen",
+   "dst": "team:sales"
+  },
+  {
+   "type": "member_of",
+   "src": "person:mei-tanaka",
+   "dst": "team:sales"
+  },
+  {
+   "type": "member_of",
+   "src": "person:samuel-adeyemi",
+   "dst": "team:people-ops"
+  },
+  {
+   "type": "member_of",
+   "src": "person:oliver-schmidt",
+   "dst": "team:people-ops"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:maya-okonkwo",
+   "dst": "concept:sales"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:maya-okonkwo",
+   "dst": "concept:procurement"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:raj-patel",
+   "dst": "concept:api"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:raj-patel",
+   "dst": "concept:remote-access"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:elena-vasquez",
+   "dst": "concept:incident-response"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:elena-vasquez",
+   "dst": "concept:data-security"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:elena-vasquez",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:tom-becker",
+   "dst": "concept:api"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:tom-becker",
+   "dst": "concept:data-governance"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:grace-liu",
+   "dst": "concept:sales"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:grace-liu",
+   "dst": "concept:support"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:samuel-adeyemi",
+   "dst": "concept:hr-policy"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:samuel-adeyemi",
+   "dst": "concept:onboarding"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:samuel-adeyemi",
+   "dst": "concept:expenses-travel"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:nina-hansen",
+   "dst": "concept:api"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:nina-hansen",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:carlos-mendez",
+   "dst": "concept:remote-access"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:carlos-mendez",
+   "dst": "concept:device-management"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:priya-sharma",
+   "dst": "concept:access-provisioning"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:priya-sharma",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:jonas-weber",
+   "dst": "concept:incident-response"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:jonas-weber",
+   "dst": "concept:data-security"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:aisha-khan",
+   "dst": "concept:api"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:aisha-khan",
+   "dst": "concept:data-governance"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:daniel-cohen",
+   "dst": "concept:sales"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:daniel-cohen",
+   "dst": "concept:procurement"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:mei-tanaka",
+   "dst": "concept:support"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:mei-tanaka",
+   "dst": "concept:onboarding"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:oliver-schmidt",
+   "dst": "concept:hr-policy"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:oliver-schmidt",
+   "dst": "concept:expenses-travel"
+  },
+  {
+   "type": "owns",
+   "src": "team:platform",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "owns",
+   "src": "person:maya-okonkwo",
+   "dst": "project:mfa-hardening"
+  },
+  {
+   "type": "owns",
+   "src": "person:raj-patel",
+   "dst": "project:device-fleet-mdm"
+  },
+  {
+   "type": "owns",
+   "src": "person:elena-vasquez",
+   "dst": "project:zero-trust-remote-access"
+  },
+  {
+   "type": "owns",
+   "src": "team:security",
+   "dst": "project:incident-response-automation"
+  },
+  {
+   "type": "owns",
+   "src": "person:nina-hansen",
+   "dst": "project:expense-redesign"
+  },
+  {
+   "type": "owns",
+   "src": "person:carlos-mendez",
+   "dst": "project:procurement-integration"
+  },
+  {
+   "type": "owns",
+   "src": "team:people-ops",
+   "dst": "project:onboarding-automation"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:sso-setup-guide",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:mfa-policy",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:api-reference",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:vpn-remote-access",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:device-enrollment",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:incident-runbook",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:expense-policy",
+   "dst": "product:flowdesk-ops"
+  },
+  {
+   "type": "part_of",
+   "src": "doc:procurement-workflow",
+   "dst": "product:flowdesk-ops"
+  },
+  {
+   "type": "about",
+   "src": "doc:sso-setup-guide",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "about",
+   "src": "doc:mfa-policy",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "about",
+   "src": "doc:api-reference",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "about",
+   "src": "doc:vpn-remote-access",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "about",
+   "src": "doc:device-enrollment",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "about",
+   "src": "doc:incident-runbook",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "about",
+   "src": "doc:expense-policy",
+   "dst": "product:flowdesk-ops"
+  },
+  {
+   "type": "about",
+   "src": "doc:procurement-workflow",
+   "dst": "product:flowdesk-ops"
+  },
+  {
+   "type": "depends_on",
+   "src": "project:mfa-hardening",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "depends_on",
+   "src": "project:zero-trust-remote-access",
+   "dst": "project:device-fleet-mdm"
+  },
+  {
+   "type": "depends_on",
+   "src": "project:incident-response-automation",
+   "dst": "project:zero-trust-remote-access"
+  },
+  {
+   "type": "depends_on",
+   "src": "project:procurement-integration",
+   "dst": "project:expense-redesign"
+  },
+  {
+   "type": "depends_on",
+   "src": "project:onboarding-automation",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "serves",
+   "src": "project:device-fleet-mdm",
+   "dst": "customer:northwind-logistics"
+  },
+  {
+   "type": "serves",
+   "src": "project:zero-trust-remote-access",
+   "dst": "customer:vertex-health"
+  },
+  {
+   "type": "serves",
+   "src": "project:expense-redesign",
+   "dst": "customer:brightpay-fintech"
+  },
+  {
+   "type": "serves",
+   "src": "project:procurement-integration",
+   "dst": "customer:granite-manufacturing"
+  },
+  {
+   "type": "serves",
+   "src": "person:samuel-adeyemi",
+   "dst": "customer:cedar-retail"
+  },
+  {
+   "type": "serves",
+   "src": "person:grace-liu",
+   "dst": "customer:orbital-media"
+  },
+  {
+   "type": "serves",
+   "src": "person:tom-becker",
+   "dst": "customer:vertex-health"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:sso-setup-guide",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:mfa-policy",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:api-reference",
+   "dst": "concept:api"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:vpn-remote-access",
+   "dst": "concept:remote-access"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:device-enrollment",
+   "dst": "concept:device-management"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:incident-runbook",
+   "dst": "concept:incident-response"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:expense-policy",
+   "dst": "concept:expenses-travel"
+  },
+  {
+   "type": "mentions",
+   "src": "doc:procurement-workflow",
+   "dst": "concept:procurement"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:maya-okonkwo",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:raj-patel",
+   "dst": "concept:device-management"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:elena-vasquez",
+   "dst": "concept:remote-access"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:nina-hansen",
+   "dst": "concept:expenses-travel"
+  },
+  {
+   "type": "expert_in",
+   "src": "person:carlos-mendez",
+   "dst": "concept:procurement"
+  },
+  {
+   "type": "authored",
+   "src": "person:elena-vasquez",
+   "dst": "BIZ-101"
+  },
+  {
+   "type": "authored",
+   "src": "person:raj-patel",
+   "dst": "BIZ-102"
+  },
+  {
+   "type": "authored",
+   "src": "person:tom-becker",
+   "dst": "BIZ-103"
+  },
+  {
+   "type": "authored",
+   "src": "person:grace-liu",
+   "dst": "BIZ-104"
+  },
+  {
+   "type": "authored",
+   "src": "person:priya-sharma",
+   "dst": "BIZ-105"
+  },
+  {
+   "type": "authored",
+   "src": "person:jonas-weber",
+   "dst": "BIZ-106"
+  },
+  {
+   "type": "authored",
+   "src": "person:samuel-adeyemi",
+   "dst": "BIZ-107"
+  },
+  {
+   "type": "authored",
+   "src": "person:nina-hansen",
+   "dst": "BIZ-108"
+  },
+  {
+   "type": "authored",
+   "src": "person:carlos-mendez",
+   "dst": "BIZ-109"
+  },
+  {
+   "type": "authored",
+   "src": "person:aisha-khan",
+   "dst": "BIZ-110"
+  },
+  {
+   "type": "authored",
+   "src": "person:daniel-cohen",
+   "dst": "BIZ-111"
+  },
+  {
+   "type": "authored",
+   "src": "person:mei-tanaka",
+   "dst": "BIZ-112"
+  },
+  {
+   "type": "authored",
+   "src": "person:elena-vasquez",
+   "dst": "BIZ-113"
+  },
+  {
+   "type": "authored",
+   "src": "person:tom-becker",
+   "dst": "BIZ-114"
+  },
+  {
+   "type": "authored",
+   "src": "person:oliver-schmidt",
+   "dst": "BIZ-115"
+  },
+  {
+   "type": "authored",
+   "src": "person:priya-sharma",
+   "dst": "BIZ-116"
+  },
+  {
+   "type": "authored",
+   "src": "person:maya-okonkwo",
+   "dst": "BIZ-117"
+  },
+  {
+   "type": "authored",
+   "src": "person:jonas-weber",
+   "dst": "BIZ-118"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-101",
+   "dst": "M-01"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-102",
+   "dst": "M-01"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-113",
+   "dst": "M-01"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-103",
+   "dst": "M-02"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-104",
+   "dst": "M-02"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-114",
+   "dst": "M-02"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-105",
+   "dst": "M-03"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-116",
+   "dst": "M-03"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-106",
+   "dst": "M-04"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-118",
+   "dst": "M-04"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-107",
+   "dst": "M-05"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-108",
+   "dst": "M-05"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-109",
+   "dst": "M-06"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-110",
+   "dst": "M-06"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-111",
+   "dst": "M-07"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-112",
+   "dst": "M-07"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-115",
+   "dst": "M-08"
+  },
+  {
+   "type": "decided_in",
+   "src": "BIZ-117",
+   "dst": "M-08"
+  },
+  {
+   "type": "attended",
+   "src": "person:elena-vasquez",
+   "dst": "M-01"
+  },
+  {
+   "type": "attended",
+   "src": "person:raj-patel",
+   "dst": "M-01"
+  },
+  {
+   "type": "attended",
+   "src": "person:oliver-schmidt",
+   "dst": "M-01"
+  },
+  {
+   "type": "attended",
+   "src": "person:tom-becker",
+   "dst": "M-02"
+  },
+  {
+   "type": "attended",
+   "src": "person:grace-liu",
+   "dst": "M-02"
+  },
+  {
+   "type": "attended",
+   "src": "person:samuel-adeyemi",
+   "dst": "M-02"
+  },
+  {
+   "type": "attended",
+   "src": "person:priya-sharma",
+   "dst": "M-03"
+  },
+  {
+   "type": "attended",
+   "src": "person:daniel-cohen",
+   "dst": "M-03"
+  },
+  {
+   "type": "attended",
+   "src": "person:nina-hansen",
+   "dst": "M-03"
+  },
+  {
+   "type": "attended",
+   "src": "person:jonas-weber",
+   "dst": "M-04"
+  },
+  {
+   "type": "attended",
+   "src": "person:mei-tanaka",
+   "dst": "M-04"
+  },
+  {
+   "type": "attended",
+   "src": "person:samuel-adeyemi",
+   "dst": "M-05"
+  },
+  {
+   "type": "attended",
+   "src": "person:nina-hansen",
+   "dst": "M-05"
+  },
+  {
+   "type": "attended",
+   "src": "person:grace-liu",
+   "dst": "M-05"
+  },
+  {
+   "type": "attended",
+   "src": "person:carlos-mendez",
+   "dst": "M-06"
+  },
+  {
+   "type": "attended",
+   "src": "person:aisha-khan",
+   "dst": "M-06"
+  },
+  {
+   "type": "attended",
+   "src": "person:daniel-cohen",
+   "dst": "M-07"
+  },
+  {
+   "type": "attended",
+   "src": "person:mei-tanaka",
+   "dst": "M-07"
+  },
+  {
+   "type": "attended",
+   "src": "person:maya-okonkwo",
+   "dst": "M-07"
+  },
+  {
+   "type": "attended",
+   "src": "person:oliver-schmidt",
+   "dst": "M-08"
+  },
+  {
+   "type": "attended",
+   "src": "person:maya-okonkwo",
+   "dst": "M-08"
+  },
+  {
+   "type": "attended",
+   "src": "person:priya-sharma",
+   "dst": "M-08"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-101",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-101",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-102",
+   "dst": "project:mfa-hardening"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-102",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-103",
+   "dst": "project:device-fleet-mdm"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-103",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-104",
+   "dst": "project:zero-trust-remote-access"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-107",
+   "dst": "project:incident-response-automation"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-107",
+   "dst": "product:flowdesk-ops"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-108",
+   "dst": "project:incident-response-automation"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-109",
+   "dst": "project:procurement-integration"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-110",
+   "dst": "project:expense-redesign"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-111",
+   "dst": "project:onboarding-automation"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-111",
+   "dst": "product:atlas-identity"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-113",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-113",
+   "dst": "project:mfa-hardening"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-114",
+   "dst": "project:device-fleet-mdm"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-114",
+   "dst": "product:sentry-endpoint"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-117",
+   "dst": "product:flowdesk-ops"
+  },
+  {
+   "type": "about",
+   "src": "BIZ-118",
+   "dst": "project:procurement-integration"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-101",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-102",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-103",
+   "dst": "concept:device-management"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-104",
+   "dst": "concept:remote-access"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-104",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-105",
+   "dst": "concept:data-governance"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-105",
+   "dst": "concept:data-security"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-106",
+   "dst": "concept:api"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-107",
+   "dst": "concept:incident-response"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-108",
+   "dst": "concept:incident-response"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-108",
+   "dst": "concept:data-security"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-109",
+   "dst": "concept:procurement"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-110",
+   "dst": "concept:expenses-travel"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-111",
+   "dst": "concept:onboarding"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-111",
+   "dst": "concept:access-provisioning"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-112",
+   "dst": "concept:hr-policy"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-112",
+   "dst": "concept:onboarding"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-113",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-114",
+   "dst": "concept:device-management"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-114",
+   "dst": "concept:data-security"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-115",
+   "dst": "concept:access-provisioning"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-115",
+   "dst": "concept:authentication"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-116",
+   "dst": "concept:data-security"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-116",
+   "dst": "concept:data-governance"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-117",
+   "dst": "concept:sales"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-117",
+   "dst": "concept:support"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-118",
+   "dst": "concept:api"
+  },
+  {
+   "type": "mentions",
+   "src": "BIZ-118",
+   "dst": "concept:support"
+  },
+  {
+   "type": "part_of",
+   "src": "T-201",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "part_of",
+   "src": "T-202",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "part_of",
+   "src": "T-203",
+   "dst": "project:mfa-hardening"
+  },
+  {
+   "type": "part_of",
+   "src": "T-204",
+   "dst": "project:mfa-hardening"
+  },
+  {
+   "type": "part_of",
+   "src": "T-205",
+   "dst": "project:device-fleet-mdm"
+  },
+  {
+   "type": "part_of",
+   "src": "T-206",
+   "dst": "project:device-fleet-mdm"
+  },
+  {
+   "type": "part_of",
+   "src": "T-207",
+   "dst": "project:zero-trust-remote-access"
+  },
+  {
+   "type": "part_of",
+   "src": "T-208",
+   "dst": "project:zero-trust-remote-access"
+  },
+  {
+   "type": "part_of",
+   "src": "T-209",
+   "dst": "project:incident-response-automation"
+  },
+  {
+   "type": "part_of",
+   "src": "T-210",
+   "dst": "project:incident-response-automation"
+  },
+  {
+   "type": "part_of",
+   "src": "T-211",
+   "dst": "project:expense-redesign"
+  },
+  {
+   "type": "part_of",
+   "src": "T-212",
+   "dst": "project:expense-redesign"
+  },
+  {
+   "type": "part_of",
+   "src": "T-213",
+   "dst": "project:procurement-integration"
+  },
+  {
+   "type": "part_of",
+   "src": "T-214",
+   "dst": "project:procurement-integration"
+  },
+  {
+   "type": "part_of",
+   "src": "T-215",
+   "dst": "project:onboarding-automation"
+  },
+  {
+   "type": "part_of",
+   "src": "T-216",
+   "dst": "project:onboarding-automation"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-201",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-202",
+   "dst": "person:raj-patel"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-203",
+   "dst": "person:elena-vasquez"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-204",
+   "dst": "person:tom-becker"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-205",
+   "dst": "person:grace-liu"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-206",
+   "dst": "person:samuel-adeyemi"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-207",
+   "dst": "person:nina-hansen"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-208",
+   "dst": "person:carlos-mendez"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-209",
+   "dst": "person:priya-sharma"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-210",
+   "dst": "person:jonas-weber"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-211",
+   "dst": "person:aisha-khan"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-212",
+   "dst": "person:daniel-cohen"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-213",
+   "dst": "person:mei-tanaka"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-214",
+   "dst": "person:oliver-schmidt"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-215",
+   "dst": "person:maya-okonkwo"
+  },
+  {
+   "type": "assigned_to",
+   "src": "T-216",
+   "dst": "person:grace-liu"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-202",
+   "dst": "T-201"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-204",
+   "dst": "T-203"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-206",
+   "dst": "T-205"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-208",
+   "dst": "T-207"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-210",
+   "dst": "T-209"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-212",
+   "dst": "T-211"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-214",
+   "dst": "T-213"
+  },
+  {
+   "type": "depends_on",
+   "src": "T-215",
+   "dst": "T-201"
+  },
+  {
+   "type": "about",
+   "src": "Q-01",
+   "dst": "project:sso-rollout"
+  },
+  {
+   "type": "about",
+   "src": "Q-02",
+   "dst": "project:mfa-hardening"
+  },
+  {
+   "type": "about",
+   "src": "Q-03",
+   "dst": "project:zero-trust-remote-access"
+  },
+  {
+   "type": "about",
+   "src": "Q-04",
+   "dst": "project:incident-response-automation"
+  },
+  {
+   "type": "about",
+   "src": "Q-05",
+   "dst": "project:expense-redesign"
+  },
+  {
+   "type": "about",
+   "src": "Q-06",
+   "dst": "project:procurement-integration"
+  }
+ ]
+}

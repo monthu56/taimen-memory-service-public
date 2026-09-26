@@ -1,0 +1,12 @@
+# gitleaks: allowlist только для примера окружения и интеграционного теста (подготовка
+# открытого релиза 0.1). Значения проверены вручную: заглушка в .env.example и тестовая
+# константа; ни одно не даёт доступа к реальной системе.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Example environment file and integration-test fixture"
+paths = [
+  '''^deploy/\.env\.example$''',                        # пример ключа сервера памяти для локального запуска
+  '''^tests/integration/test_e2e_context_engine\.py$''', # тестовый ключ локального e2e-контура
+]

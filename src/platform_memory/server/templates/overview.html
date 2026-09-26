@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Обзор — Memory Console{% endblock %}
+{% block content %}
+<h1>Обзор — база знаний «{{ ns }}»</h1>
+
+{% if error %}
+<div class="panel err" role="alert">
+  <strong class="status-err">БД недоступна.</strong>
+  <div class="mono">{{ error }}</div>
+</div>
+{% else %}
+<div class="cards">
+  <div class="card">
+    <div class="num {% if stats.ok %}status-ok{% else %}status-err{% endif %}">
+      {{ "OK" if stats.ok else "СБОЙ" }}
+    </div>
+    <div class="lbl">состояние движка (граф «{{ stats.graph }}»)</div>
+  </div>
+  <div class="card">
+    <div class="num">{{ stats.nodes }}</div>
+    <div class="lbl">узлов знаний в KB</div>
+  </div>
+  <div class="card">
+    <div class="num">{{ stats.chunks }}</div>
+    <div class="lbl">фрагментов в поисковом индексе</div>
+  </div>
+</div>
+
+{% if stats.nodes_by_type %}
+<h2>Узлы по типам</h2>
+<table>
+  <thead><tr><th scope="col">Тип</th><th scope="col">Количество</th></tr></thead>
+  <tbody>
+  {% for t, n in stats.nodes_by_type.items() %}
+    <tr><td>{{ t }}</td><td>{{ n }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+
+<h2>Последние операции</h2>
+{% if recent %}
+<table>
+  <thead><tr>
+    <th scope="col">Время</th><th scope="col">Действие</th>
+    <th scope="col">Актор</th><th scope="col">Trace</th>
+  </tr></thead>
+  <tbody>
+  {% for row in recent %}
+    <tr>
+      <td class="mono">{{ row.ts }}</td>
+      <td>{{ row.action }}</td>
+      <td>{{ row.actor }}</td>
+      <td class="mono">{{ row.trace_id }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Событий аудита в этой базе знаний пока нет.</p>
+{% endif %}
+{% endblock %}

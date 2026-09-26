@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Аудит — Memory Console{% endblock %}
+{% block content %}
+<h1>Аудит — база знаний «{{ ns }}»</h1>
+<p class="muted">Последние события контура этой KB: импорт, удаления, доступ к ПДн.</p>
+
+{% if rows %}
+<table>
+  <thead><tr>
+    <th scope="col">Время</th><th scope="col">Действие</th><th scope="col">Актор</th>
+    <th scope="col">Trace</th><th scope="col">Детали</th>
+  </tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td class="mono">{{ row.ts }}</td>
+      <td>{% if row.action in ("delete", "pii_access") %}<span class="badge">{{ row.action }}</span>{% else %}{{ row.action }}{% endif %}</td>
+      <td>{{ row.actor }}</td>
+      <td class="mono">{{ row.trace_id }}</td>
+      <td class="mono">{{ row.payload if row.payload else "" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Событий аудита в «{{ ns }}» пока нет.</p>
+{% endif %}
+{% endblock %}
