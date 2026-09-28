@@ -507,7 +507,7 @@ def _core_client(monkeypatch, signing_key, **overrides) -> tuple[TestClient, lis
 
     calls: list = []
 
-    def fake_reconcile(_settings, *, snapshot, namespace, scopes, actor):
+    def fake_reconcile(_settings, *, snapshot, namespace, scopes, actor, **_state):
         calls.append((namespace, actor))
         return {"opened": 0, "duplicate": False}
 

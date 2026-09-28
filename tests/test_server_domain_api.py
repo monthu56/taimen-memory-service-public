@@ -12,10 +12,19 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from platform_memory.context.typed import TypedContextRequest
 from platform_memory.core import timing
 from platform_memory.core.kinds import PackError, UnknownKindError, UnknownRelationError
-from platform_memory.domain.reconcile import SnapshotError, StaleSnapshotError
-from platform_memory.domain.registry import PackConflictError, PackNotFoundError
+from platform_memory.domain.reconcile import (
+    SnapshotError,
+    SnapshotStateMismatch,
+    StaleSnapshotError,
+)
+from platform_memory.domain.registry import (
+    PackConflictError,
+    PackNotFoundError,
+    PackScopeConflictError,
+)
 from platform_memory.server import app as app_mod
 from platform_memory.server import iam
 from platform_memory.server import memory_api as api_mod
@@ -55,6 +64,7 @@ class _FakeConn:
 class _FakeRegistry:
     status = "created"
     error: Exception | None = None
+    conn = _FakeConn()
 
     def __init__(self, env):
         self.env = env
@@ -65,11 +75,22 @@ class _FakeRegistry:
         self.env["registered"].append((payload, registered_by))
         return {"status": self.status, "pack": payload}
 
-    def list_packs(self):
+    def register_tenant(self, payload, *, owner, registered_by=""):
+        if self.error:
+            raise self.error
+        self.env["registered"].append((payload, registered_by, owner))
+        return {"status": self.status, "pack": payload}
+
+    def list_packs(self, namespace=None):
+        self.env["listed"].append(namespace)
         return [{"name": "default", "versions": ["1"], "latest": "1", "builtin": True}]
 
     def get(self, name, version=""):
         raise PackNotFoundError(f"Пакет {name} не найден")
+
+    def get_tenant(self, name, version="", *, namespace):
+        self.env["tenant_get"].append((name, version, namespace))
+        raise PackNotFoundError(f"Пакет tenant:{name} не найден")
 
     class _Payload:
         def to_payload(self):
@@ -87,7 +108,15 @@ class _FakeRegistry:
 
 @pytest.fixture
 def env(monkeypatch):
-    state: dict = {"registered": [], "reconciled": [], "typed": []}
+    state: dict = {
+        "registered": [],
+        "reconciled": [],
+        "typed": [],
+        "entities": [],
+        "reindexed": [],
+        "listed": [],
+        "tenant_get": [],
+    }
     settings = app_mod.get_settings().model_copy(
         update={
             "api_keys": json.dumps(_KEYS),
@@ -104,18 +133,32 @@ def env(monkeypatch):
     monkeypatch.setattr(api_mod, "open_registry", lambda conn, s: registry)
     state["registry"] = registry
 
-    def fake_reconcile(settings, *, snapshot, namespace, scopes, actor):
+    def fake_reconcile(settings, *, snapshot, namespace, scopes, actor, **state_kw):
         if state.get("reconcile_error"):
             raise state["reconcile_error"]
         state["reconciled"].append((namespace, snapshot, scopes, actor))
+        state.setdefault("reconcile_state", []).append(state_kw)
         return {"opened": 1, "closed": 0, "unchanged": 0, "duplicate": False}
 
     def fake_typed(settings, payload):
         state["typed"].append(payload)
         return {"sections": [], "facts": [], "used": {}, "trace_id": "ctx-1"}
 
+    def fake_reindex(settings, conn, namespace, catalog, embedder):
+        if state.get("reindex_error"):
+            raise state["reindex_error"]
+        state["reindexed"].append(namespace)
+        return {"indexed": 2, "updated": 0, "removed": 1, "unchanged": 0}
+
     monkeypatch.setattr(api_mod, "reconcile_snapshot", fake_reconcile)
+
+    def fake_entities(settings, payload):
+        state["entities"].append(payload)
+        return {"items": [], "nextCursor": None, "namespaces": payload["namespaces"]}
+
     monkeypatch.setattr(api_mod, "compile_typed_context", fake_typed)
+    monkeypatch.setattr(api_mod, "query_entities", fake_entities)
+    monkeypatch.setattr(api_mod, "reindex_namespace", fake_reindex)
     state["client"] = TestClient(app_mod.app)
     return state
 
@@ -289,6 +332,72 @@ class TestTypedContextRoute:
         assert "typed.anchors;dur=2.0" in resp.headers["server-timing"]
 
 
+class TestEntitiesQueryRoute:
+    """K030: перечень сущностей — namespaces и scopes видимости задаёт сервер."""
+
+    def _post(self, env, body, key="tenant-secret"):
+        return env["client"].post("/api/memory/entities:query", json=body, headers=_h(key))
+
+    def test_namespaces_and_server_visibility(self, env):
+        body = {
+            "namespaces": [NS],
+            "kinds": ["license"],
+            "where": [{"attr": "validUntil", "op": "lte", "value": "2026-12-31"}],
+            "asOf": "2026-09-01T00:00:00Z",
+            "limit": 50,
+            "cursor": "abc",
+            "allowedScopes": ["workspace:w1"],
+        }
+        resp = self._post(env, body)
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"items": [], "nextCursor": None, "namespaces": [NS]}
+        (payload,) = env["entities"]
+        assert payload["namespaces"] == [NS]
+        assert payload["allowed_scopes"] == ["workspace:w1"]
+        assert "allowedScopes" not in payload and "scope" not in payload
+        assert payload["where"] == body["where"]
+        assert (payload["as_of"], payload["limit"], payload["cursor"]) == (
+            "2026-09-01T00:00:00Z",
+            50,
+            "abc",
+        )
+
+    def test_scope_like_typed(self, env):
+        resp = self._post(env, {"kinds": ["license"], "scope": {"namespaces": [NS]}})
+        assert resp.status_code == 200
+        assert env["entities"][0]["namespaces"] == [NS]
+
+    def test_namespaces_and_scope_together_rejected(self, env):
+        body = {"kinds": ["license"], "namespaces": [NS], "scope": {"namespace": NS}}
+        assert self._post(env, body).status_code == 400
+
+    def test_read_grant_required(self, env):
+        assert self._post(env, {"kinds": ["x"], "namespaces": ["other"]}).status_code == 403
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"kinds": []},
+            {"kinds": [f"k{i}" for i in range(21)]},
+            {"kinds": ["bad kind"]},
+            {"limit": 0},
+            {"limit": 501},
+            {"where": [{"attr": "a", "op": "like", "value": "x"}]},
+        ],
+    )
+    def test_schema_limits(self, env, extra):
+        body = {"kinds": ["license"], "namespaces": [NS], **extra}
+        assert self._post(env, body).status_code == 422
+        assert env["entities"] == []
+
+    def test_engine_value_error_is_400(self, env, monkeypatch):
+        def boom(settings, payload):
+            raise ValueError("cursor: не курсор перечня")
+
+        monkeypatch.setattr(api_mod, "query_entities", boom)
+        assert self._post(env, {"kinds": ["license"], "namespaces": [NS]}).status_code == 400
+
+
 class TestCoreOnlyRoutes:
     """Амендмент MEM-ADR-020: reconcile, пакеты и виды namespace — только identity ядра."""
 
@@ -369,3 +478,274 @@ class TestCoreOnlyRoutes:
         assert app_mod.core_identities(app_mod.get_settings()) is None
         resp = env["client"].get("/api/memory/packages", headers=_h("tenant-secret"))
         assert resp.status_code == 200
+
+
+class TestContractBeforeImplementation:
+    """Амендмент MEM-ADR-020 2026-09-28: поля объявлены в OpenAPI и исполняются —
+    сверка по состоянию (K004), ``searchable`` (K005), ``where`` (K006), пакеты
+    арендатора (K007); прежний вход проходит как раньше."""
+
+    def test_reconcile_state_fields_reach_engine(self, env):
+        """K004 снял 501: dryRun и expectedState уходят в движок, а не в документ снимка."""
+        body = {**SNAP, "namespace": NS, "dryRun": True, "expectedState": "st1-abc"}
+        resp = env["client"].post("/api/memory/reconcile", json=body, headers=_h("tenant-secret"))
+        assert resp.status_code == 200
+        assert env["reconciled"][0][1] == SNAP
+        assert env["reconcile_state"] == [{"dry_run": True, "expected_state": "st1-abc"}]
+
+    def test_reconcile_state_defaults(self, env):
+        body = {**SNAP, "namespace": NS}
+        resp = env["client"].post("/api/memory/reconcile", json=body, headers=_h("tenant-secret"))
+        assert resp.status_code == 200
+        assert env["reconcile_state"] == [{"dry_run": False, "expected_state": None}]
+
+    def test_reconcile_state_needs_write_grant_first(self, env):
+        body = {**SNAP, "namespace": "other", "dryRun": True}
+        resp = env["client"].post("/api/memory/reconcile", json=body, headers=_h("tenant-secret"))
+        assert resp.status_code == 403
+        assert env["reconciled"] == []
+
+    def test_snapshot_stale_409_detail(self, env):
+        env["reconcile_error"] = SnapshotStateMismatch("st1-old", "st1-new")
+        body = {**SNAP, "namespace": NS, "expectedState": "st1-old"}
+        resp = env["client"].post("/api/memory/reconcile", json=body, headers=_h("tenant-secret"))
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert detail["code"] == "snapshot_stale" and detail["message"]
+        assert (detail["expectedState"], detail["stateToken"]) == ("st1-old", "st1-new")
+
+    def test_expected_state_too_long_422(self, env):
+        body = {**SNAP, "namespace": NS, "expectedState": "x" * 129}
+        resp = env["client"].post("/api/memory/reconcile", json=body, headers=_h("tenant-secret"))
+        assert resp.status_code == 422
+        assert env["reconciled"] == []
+
+    def test_reconcile_dry_run_false_passes_snapshot_as_is(self, env):
+        body = {**SNAP, "namespace": NS, "dryRun": False}
+        resp = env["client"].post("/api/memory/reconcile", json=body, headers=_h("tenant-secret"))
+        assert resp.status_code == 200
+        assert env["reconciled"][0][1] == SNAP  # служебные поля в документ не попадают
+
+    def test_searchable_kind_registered_as_is(self, env):
+        """K005 снял 501: searchable уходит в реестр как есть (валидирует core.kinds)."""
+        pack = {**PACK, "kinds": [{"kind": "issue", "searchable": {"fields": ["title"]}}]}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("svc-secret"))
+        assert resp.status_code == 201
+        assert env["registered"][0][0] == pack
+
+    def test_invalid_searchable_is_400(self, env):
+        env["registry"].error = PackError("kinds[0].searchable.fields: имена повторяются")
+        pack = {**PACK, "kinds": [{"kind": "issue", "searchable": {"fields": ["a", "a"]}}]}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("svc-secret"))
+        assert resp.status_code == 400
+
+    def test_pack_payload_unchanged(self, env):
+        """Объявленные в схеме поля не дописываются в пакет: хэш версии прежний."""
+        pack = {**PACK, "relations": [{"relation": "blocks", "extraKey": 1}], "x-note": "n"}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("svc-secret"))
+        assert resp.status_code == 201
+        assert env["registered"][0][0] == pack
+        resp = env["client"].post(
+            "/api/memory/packages", json={**PACK, "scope": "common"}, headers=_h("svc-secret")
+        )
+        assert resp.status_code == 201
+
+    def test_pack_old_error_codes_kept(self, env):
+        """Прежние поля валидирует движок: мусор в kinds — не 422 pydantic."""
+        env["registry"].error = PackError("kinds[0]: ожидается объект")
+        pack = {**PACK, "kinds": [1]}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("svc-secret"))
+        assert resp.status_code == 400
+
+    @pytest.mark.parametrize(
+        ("extra", "expected"),
+        [
+            (
+                {"where": [{"attr": "okpd2", "op": "prefix", "value": "62.01"}]},
+                {"where": [{"attr": "okpd2", "op": "prefix", "value": "62.01"}]},
+            ),
+            (
+                {"where": [{"attr": "ktru", "op": "exists"}]},
+                {"where": [{"attr": "ktru", "op": "exists"}]},
+            ),
+            (
+                {"traverse": [{"relation": "performs", "where": [{"attr": "a", "op": "exists"}]}]},
+                {"traverse": [{"relation": "performs", "where": [{"attr": "a", "op": "exists"}]}]},
+            ),
+        ],
+    )
+    def test_typed_where_reaches_engine(self, env, extra, expected):
+        """K006: where исполняется движком — 501 снят, условия доходят как прислано."""
+        body = {"anchors": [{"value": "PROJ-1"}], "scope": {"namespace": NS}, **extra}
+        resp = env["client"].post(
+            "/api/memory/context/typed", json=body, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 200
+        (payload,) = env["typed"]
+        assert {k: payload[k] for k in expected} == expected
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"where": [{"attr": "okpd2", "op": "prefix", "value": "62."}]},
+            {"where": [{"attr": "validUntil", "op": "lte", "value": "вчера"}]},
+            {"traverse": [{"relation": "holds", "where": [{"attr": "a", "op": "like"}]}]},
+        ],
+    )
+    def test_typed_invalid_where_value_is_400(self, env, monkeypatch, extra):
+        """Значение условия (и форма условия шага) проверяет движок: 400."""
+        real = TypedContextRequest.from_payload
+        monkeypatch.setattr(
+            api_mod, "compile_typed_context", lambda settings, payload: real(payload)
+        )
+        body = {"anchors": [{"value": "PROJ-1"}], "scope": {"namespace": NS}, **extra}
+        resp = env["client"].post(
+            "/api/memory/context/typed", json=body, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 400
+        assert "where" in resp.json()["detail"]
+
+    def test_typed_invalid_where_is_422(self, env):
+        body = {
+            "anchors": [{"value": "PROJ-1"}],
+            "scope": {"namespace": NS},
+            "where": [{"attr": "okpd2", "op": "like", "value": "62"}],
+        }
+        resp = env["client"].post(
+            "/api/memory/context/typed", json=body, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 422
+
+    def test_typed_payload_unchanged(self, env):
+        """Объявленные поля без значения не подменяют camelCase-варианты движка."""
+        body = {
+            "anchors": ["PROJ-1"],
+            "traverse": [{"relation": "blocks", "from": "previous"}],
+            "asOf": "2026-09-01T00:00:00Z",
+            "allowSemantic": True,
+            "scope": {"namespace": NS},
+        }
+        resp = env["client"].post(
+            "/api/memory/context/typed", json=body, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 200
+        payload = dict(env["typed"][0])
+        payload.pop("namespaces")
+        payload.pop("allowed_scopes")
+        assert payload == {
+            "anchors": ["PROJ-1"],
+            "traverse": [{"relation": "blocks", "from": "previous"}],
+            "asOf": "2026-09-01T00:00:00Z",
+            "allowSemantic": True,
+        }
+
+    def test_searchable_still_needs_service_scope(self, env):
+        pack = {**PACK, "kinds": [{"kind": "issue", "searchable": {"fields": ["title"]}}]}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("tenant-secret"))
+        assert resp.status_code == 403
+
+
+class TestNamespaceKindsReindex:
+    """PUT …/kinds переиндексирует сущности для поиска по смыслу (K005)."""
+
+    def test_put_reports_reindex(self, env):
+        resp = env["client"].put(
+            f"/api/memory/namespaces/{NS}/kinds",
+            json={"strict": False, "packages": ["tracker"]},
+            headers=_h("tenant-secret"),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reindex"] == {"indexed": 2, "updated": 0, "removed": 1, "unchanged": 0}
+        assert env["reindexed"] == [NS]
+
+    def test_reindex_error_keeps_settings(self, env):
+        env["reindex_error"] = RuntimeError("gateway недоступен")
+        resp = env["client"].put(
+            f"/api/memory/namespaces/{NS}/kinds",
+            json={"strict": False, "packages": ["tracker"]},
+            headers=_h("tenant-secret"),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["reindex"] == {"error": "gateway недоступен"}
+
+
+class TestTenantPackages:
+    """K007: пакет арендатора регистрирует владелец namespace, а не service scope."""
+
+    TENANT_PACK = {**PACK, "scope": "tenant", "namespace": NS}
+
+    def test_write_grant_registers_without_service_scope(self, env):
+        resp = env["client"].post(
+            "/api/memory/packages", json=self.TENANT_PACK, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 201, resp.text
+        payload, label, owner = env["registered"][0]
+        assert owner == NS and label == "tenant-key"
+        # scope/namespace — адрес хранения, в спецификацию пакета (и хэш) не входят.
+        assert payload == PACK
+
+    def test_foreign_namespace_403(self, env):
+        pack = {**self.TENANT_PACK, "namespace": "other:tenant"}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("tenant-secret"))
+        assert resp.status_code == 403
+        # Service scope без записи в namespace — тоже нет: право — у владельца базы.
+        resp = env["client"].post(
+            "/api/memory/packages", json=self.TENANT_PACK, headers=_h("svc-secret")
+        )
+        assert resp.status_code == 403
+        assert env["registered"] == []
+
+    def test_namespace_required_and_only_for_tenant(self, env):
+        pack = {**PACK, "scope": "tenant"}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("tenant-secret"))
+        assert resp.status_code == 400
+        pack = {**PACK, "namespace": NS}
+        resp = env["client"].post("/api/memory/packages", json=pack, headers=_h("svc-secret"))
+        assert resp.status_code == 400
+        assert env["registered"] == []
+
+    @pytest.mark.parametrize("code", ["pack_name_conflict", "kind_conflict", "relation_conflict"])
+    def test_conflict_with_common_is_409_with_code(self, env, code):
+        env["registry"].error = PackScopeConflictError(code, "совпадает с общим")
+        resp = env["client"].post(
+            "/api/memory/packages", json=self.TENANT_PACK, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 409
+        assert resp.json()["detail"] == {"code": code, "message": "совпадает с общим"}
+
+    def test_immutability_conflict_keeps_string_detail(self, env):
+        env["registry"].error = PackConflictError("иммутабельна")
+        resp = env["client"].post(
+            "/api/memory/packages", json=self.TENANT_PACK, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 409 and resp.json()["detail"] == "иммутабельна"
+
+    def test_list_with_namespace_needs_read_grant(self, env):
+        resp = env["client"].get(
+            "/api/memory/packages", params={"namespace": NS}, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 200 and env["listed"] == [NS]
+        resp = env["client"].get(
+            "/api/memory/packages", params={"namespace": "other"}, headers=_h("tenant-secret")
+        )
+        assert resp.status_code == 403
+        resp = env["client"].get("/api/memory/packages", headers=_h("tenant-secret"))
+        assert resp.status_code == 200 and env["listed"] == [NS, None]
+
+    def test_get_tenant_pack(self, env):
+        resp = env["client"].get(
+            "/api/memory/packages/tenant:fleet",
+            params={"namespace": NS, "version": "2"},
+            headers=_h("tenant-secret"),
+        )
+        assert resp.status_code == 404
+        assert env["tenant_get"] == [("fleet", "2", NS)]
+        # Без namespace пакет арендатора не ищется: 404, а не общий пакет «tenant:…».
+        resp = env["client"].get("/api/memory/packages/tenant:fleet", headers=_h("tenant-secret"))
+        assert resp.status_code == 404 and len(env["tenant_get"]) == 1
+        resp = env["client"].get(
+            "/api/memory/packages/tenant:fleet",
+            params={"namespace": "other"},
+            headers=_h("tenant-secret"),
+        )
+        assert resp.status_code == 403

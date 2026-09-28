@@ -30,7 +30,10 @@
 * ``temporal`` связи — у фактов связи есть интервал валидности (по умолчанию ``true``);
 * ``cardinality`` связи — ``many`` (по умолчанию: у субъекта набор объектов, сверка
   закрывает только пропавшие пары) или ``one`` (у субъекта один объект: смена объекта
-  при сверке снимка закрывает старый факт с ``superseded_by`` нового).
+  при сверке снимка закрывает старый факт с ``superseded_by`` нового);
+* ``searchable: {"fields": [...]}`` вида — сущности вида индексируются для поиска по
+  смыслу (MEM-ADR-020, амендмент 2026-09-28): текст эмбеддинга — ``title`` и значения
+  перечисленных атрибутов (``search_text``). Вид без ``searchable`` не индексируется.
 
 Модуль чистый (БД не нужна): разбор и валидация пакета, каталог видов namespace,
 извлечение идентификаторов. Хранение — ``domain/registry.py``. Пакет по умолчанию
@@ -52,6 +55,9 @@ from typing import Any
 BASE_KINDS: frozenset[str] = frozenset({"document", "entity", "fact"})
 
 DEFAULT_PACK_NAME = "default"
+# Префикс ссылки на пакет арендатора: ``tenant:<имя>[@<версия>]`` (MEM-ADR-020, амендмент
+# 2026-09-28). Имя пакета двоеточия не содержит, поэтому префикс однозначен.
+TENANT_REF_PREFIX = "tenant:"
 _DEFAULT_PACK_FILE = Path(__file__).parent / "packs" / "default.json"
 
 PACK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -64,6 +70,9 @@ MAX_RELATIONS = 400
 MAX_ID_PATTERNS = 10
 MAX_PATTERN_LEN = 300
 MAX_ALIASES = 20
+MAX_SEARCHABLE_FIELDS = 20
+# Имя атрибута в searchable.fields — как ключ атрибутов сущности.
+ATTR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 CARDINALITIES = ("many", "one")
 
 # Плейсхолдер шаблона ключа: ``<name пояснение>`` или ``{name}``.
@@ -258,6 +267,7 @@ class KindSpec:
     id_patterns: tuple[re.Pattern[str], ...] = ()
     attributes: dict[str, Any] | None = None
     pack: str = ""
+    searchable: tuple[str, ...] = ()  # атрибуты текста эмбеддинга; пусто — не индексируется
 
     @property
     def key_template(self) -> KeyTemplate | None:
@@ -320,6 +330,22 @@ class KindSpec:
         """Токен целиком — идентификатор этого вида (fullmatch по idPatterns)."""
         return any(p.fullmatch(token.strip()) for p in self.id_patterns)
 
+    def search_text(self, title: str, attributes: dict[str, Any] | None) -> str:
+        """Текст эмбеддинга сущности: title и ``имя: значение`` полей ``searchable``.
+
+        Порядок — как в ``fields``; отсутствующие и пустые значения пропускаются,
+        список — через запятую, объект — JSON. Пустая строка — вид не индексируется.
+        """
+        if not self.searchable:
+            return ""
+        attrs = attributes or {}
+        lines = [str(title or "").strip()]
+        for name in self.searchable:
+            value = _search_value(attrs.get(name))
+            if value:
+                lines.append(f"{name}: {value}")
+        return "\n".join(line for line in lines if line)
+
     def to_payload(self) -> dict[str, Any]:
         out: dict[str, Any] = {"kind": self.kind}
         if self.natural_key is not None:
@@ -332,6 +358,9 @@ class KindSpec:
             out["idPatterns"] = [p.pattern for p in self.id_patterns]
         if self.attributes is not None:
             out["attributes"] = self.attributes
+        # Только если задано: каноническая форма пакетов без поля не меняется.
+        if self.searchable:
+            out["searchable"] = {"fields": list(self.searchable)}
         return out
 
 
@@ -373,10 +402,18 @@ class DomainPack:
     kinds: tuple[KindSpec, ...] = ()
     relations: tuple[RelationSpec, ...] = ()
     description: str = ""
+    # Namespace-владелец пакета арендатора; пусто — общий пакет. В каноническую форму
+    # (и хэш версии) не входит: владелец — место хранения, а не содержимое.
+    owner: str = ""
+
+    @property
+    def ref_name(self) -> str:
+        """Имя в ссылке: ``name`` у общего пакета, ``tenant:name`` у пакета арендатора."""
+        return f"{TENANT_REF_PREFIX}{self.name}" if self.owner else self.name
 
     @property
     def ref(self) -> str:
-        return f"{self.name}@{self.version}"
+        return f"{self.ref_name}@{self.version}"
 
     def to_payload(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -392,6 +429,49 @@ class DomainPack:
     def canonical_json(self) -> str:
         """Каноническая форма для сравнения версий (иммутабельность по содержимому)."""
         return json.dumps(self.to_payload(), ensure_ascii=False, sort_keys=True)
+
+
+def _search_value(value: Any) -> str:
+    if value is None or value == "" or value == []:
+        return ""
+    if isinstance(value, list | tuple):
+        return ", ".join(v for v in (_search_value(x) for x in value) if v)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value).strip()
+
+
+def _parse_searchable(raw: Any, attrs: dict[str, Any] | None, where: str) -> tuple[str, ...]:
+    """``searchable: {fields: [...]}``: 1..20 уникальных имён атрибутов.
+
+    Если у вида объявлены ``attributes.properties``, каждое поле должно быть среди них.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict):
+        raise PackError(f"{where}.searchable: ожидается объект {{fields: [...]}}")
+    fields = raw.get("fields")
+    if not isinstance(fields, list) or not fields:
+        raise PackError(f"{where}.searchable.fields: нужен непустой список имён атрибутов")
+    if len(fields) > MAX_SEARCHABLE_FIELDS:
+        raise PackError(f"{where}.searchable.fields: не больше {MAX_SEARCHABLE_FIELDS}")
+    for name in fields:
+        if not isinstance(name, str) or not ATTR_NAME_RE.match(name):
+            raise PackError(
+                f"{where}.searchable.fields: некорректное имя атрибута {name!r}: "
+                "[A-Za-z_][A-Za-z0-9_]{0,63}"
+            )
+    if len(set(fields)) != len(fields):
+        raise PackError(f"{where}.searchable.fields: имена повторяются")
+    props = attrs.get("properties") if isinstance(attrs, dict) else None
+    if isinstance(props, dict) and props:
+        unknown = [f for f in fields if f not in props]
+        if unknown:
+            raise PackError(
+                f"{where}.searchable.fields: атрибуты {unknown} не объявлены в "
+                "attributes.properties вида"
+            )
+    return tuple(fields)
 
 
 def _str_list(raw: Any, where: str, *, limit: int) -> list[str]:
@@ -491,6 +571,7 @@ def parse_pack(payload: dict[str, Any]) -> DomainPack:
                 ),
                 attributes=attrs,
                 pack=name,
+                searchable=_parse_searchable(raw.get("searchable"), attrs, where),
             )
         )
 
@@ -539,6 +620,16 @@ def parse_pack(payload: dict[str, Any]) -> DomainPack:
         relations=tuple(relations),
         description=str(payload.get("description", "") or ""),
     )
+
+
+def split_pack_ref(ref: str) -> tuple[bool, str, str]:
+    """Ссылка на пакет -> ``(tenant, name, version)``; пустая версия — последняя."""
+    text = (ref or "").strip()
+    tenant = text.startswith(TENANT_REF_PREFIX)
+    if tenant:
+        text = text[len(TENANT_REF_PREFIX) :]
+    name, _, version = text.partition("@")
+    return tenant, name.strip(), version.strip()
 
 
 def version_key(version: str) -> tuple:
@@ -694,6 +785,10 @@ class KindCatalog:
                 return name
         return None
 
+    def searchable_kinds(self) -> dict[str, KindSpec]:
+        """Виды каталога с ``searchable`` (индексируемые для поиска по смыслу)."""
+        return {name: spec for name, spec in self.kinds.items() if spec.searchable}
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "strict": self.strict,
@@ -702,6 +797,10 @@ class KindCatalog:
             "kinds": sorted(self.kinds),
             "kindAliases": dict(sorted(self.kind_aliases.items())),
             "relations": sorted(self.relations),
+            "searchable": {
+                name: list(spec.searchable)
+                for name, spec in sorted(self.searchable_kinds().items())
+            },
             "conflicts": list(self.conflicts),
         }
 

@@ -33,4 +33,7 @@ async with AsyncMemoryClient("http://memory-service:8077", token=cred) as mem:
 ```
 
 Ошибки: `MemoryServiceError` (`status_code`, `detail`, свойства `unavailable`
-для 5xx и `not_found`), `MemoryTransportError` — ответа не было (`status_code == 0`).
+для 5xx и `not_found`), `MemoryTransportError` — ответа не было (`status_code == 0`),
+`MemorySnapshotStaleError` — `reconcile(..., expected_state=…)` застал состояние
+`(source, scope)` изменившимся с плана `dry_run` (`409 snapshot_stale`; `state_token` —
+текущее состояние, по нему строится новый план).

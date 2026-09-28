@@ -22,7 +22,10 @@
    разрешившему якорь, подошло больше сущностей, чем отдано (суффиксу — больше
    ``MAX_PER_SUFFIX`` допустимого вида в namespace, точному шагу журнала — больше
    ``MAX_RESOLVED``), — ``truncated``. Семантический добор (векторный поиск) —
-   только при явном ``allow_semantic`` и помечается ``evidence: inferred``.
+   только при явном ``allow_semantic`` и помечается ``evidence: inferred``: индекс
+   сущностей видов с ``searchable`` (кандидат — сам узел сущности) вместе с
+   фрагментами документов; у кандидата — ``score`` (косинусная близость 0..1) и
+   ``matchedOn: entity | chunk`` (MEM-ADR-020, амендмент 2026-09-28).
 2. Обход идёт только по рёбрам заданной связи, валидным на ``as_of`` (пусто —
    действующие сейчас); закрытые факты не проходятся. ``direction`` — in|out|both,
    ``depth`` — число шагов по связи, ``limit`` — максимум новых сущностей шага.
@@ -33,6 +36,12 @@
 3. Сущность видна на ``as_of``, если у неё есть версия в журнале снимков, валидная
    на этот момент (атрибуты — из этой версии), либо — для сущностей без журнала —
    если её собственный интервал ``valid_from/valid_to`` содержит момент.
+4. Фильтры ``where`` (``context/where.py``) проверяют атрибуты этой версии.
+   ``where`` верхнего уровня отбрасывает кандидатов в якоря на каждом шаге
+   разрешения, включая смысловой: шаг без прошедших кандидатов считается неуспешным,
+   и разрешение идёт дальше; число отброшенных — ``filtered`` якоря.
+   ``traverse[i].where`` отбрасывает сущности, достигнутые шагом: они не входят в
+   выдачу, не продолжают обход и не дают фактов шага (``filtered`` в ``stats.steps``).
 
 Ответ — пакет с разделами по видам, фактами, списком использованных сущностей,
 фактов и id снимков (evidence задачи в Control Plane) и trace_id. LLM не участвует.
@@ -58,8 +67,11 @@ from platform_memory.core.ontology import sanitize_label
 from platform_memory.core.scopes import MAX_ALLOWED_SCOPES, is_visible, resolve_scopes
 from platform_memory.context.resolve import MAX_RESOLVED, Candidate, Match, match_candidates
 from platform_memory.context.trace import ContextTraceStore
+from platform_memory.context.where import WhereClause, parse_where
+from platform_memory.context.where import matches as where_matches
 from platform_memory.domain.reconcile import SnapshotLedger, valid_at
 from platform_memory.domain.registry import open_registry
+from platform_memory.domain.searchable import entity_index
 from platform_memory.graph.facts import normalize_ts
 from platform_memory.graph.store import GraphStore
 from platform_memory.index import VectorIndex, build_embedder
@@ -103,6 +115,7 @@ class TraverseStep:
     depth: int = 1
     limit: int = 20
     start: str = "anchors"  # anchors | previous
+    where: list[WhereClause] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -113,6 +126,8 @@ class TypedContextRequest:
     namespaces: list[str] = field(default_factory=list)
     allow_semantic: bool = False
     semantic_k: int = 3
+    # Фильтр кандидатов в якоря (все шаги разрешения).
+    where: list[WhereClause] = field(default_factory=list)
     # Разрешённые scopes видимости (MEM-ADR-019) — задаёт HTTP-слой, не клиент.
     allowed_scopes: list[str] | None = None
 
@@ -159,6 +174,7 @@ class TypedContextRequest:
                     depth=depth,
                     limit=limit,
                     start=start,
+                    where=parse_where(raw.get("where"), f"traverse[{i}].where"),
                 )
             )
         as_of = str(payload.get("as_of", payload.get("asOf", "")) or "")
@@ -176,6 +192,7 @@ class TypedContextRequest:
                     int(payload.get("semantic_k", payload.get("semanticK", 3)) or 3),
                 ),
             ),
+            where=parse_where(payload.get("where")),
             allowed_scopes=[str(s) for s in allowed] if allowed is not None else None,
         )
 
@@ -197,6 +214,14 @@ def _unique(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _scopes(props: dict[str, Any]) -> list[str]:
     raw = props.get("scopes")
     return [str(s) for s in raw] if isinstance(raw, list) else []
+
+
+def _match(score: float | None, matched_on: str) -> dict[str, Any]:
+    """Поля смыслового разрешения якоря: ``score`` (0..1, если известна) и ``matchedOn``."""
+    out: dict[str, Any] = {"matchedOn": matched_on}
+    if score is not None:
+        out["score"] = round(max(0.0, min(1.0, float(score))), 6)
+    return out
 
 
 def _summarize(out: dict[str, Any], *, truncated: bool) -> None:
@@ -239,6 +264,8 @@ class _Compiler:
         self.req = req
         self.allowed = allowed
         self.entities: dict[tuple[str, str], dict[str, Any]] = {}
+        # Видимые на as_of сущности, включая не прошедшие where (в выдачу не входят).
+        self._states: dict[tuple[str, str], dict[str, Any]] = {}
         self.facts: dict[str, dict[str, Any]] = {}
         self._versions: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         # (namespace, ключ) -> graphid вершин: старт шагов обхода без поиска по свойствам.
@@ -246,6 +273,8 @@ class _Compiler:
         self._labels: dict[int, tuple[str, str]] | None = None
         # Шаги, у которых на уровне BFS рёбер оказалось больше лимита чтения.
         self.edges_truncated: set[int] = set()
+        # Шаг -> число сущностей, отброшенных его where.
+        self.filtered: dict[int, int] = {}
         # Фазы компиляции (stats.phases_ms); versions — внутри anchors/traverse.
         self.phases = timing.Phases()
 
@@ -319,15 +348,18 @@ class _Compiler:
             "reached_via": [],
         }
 
-    def _accept(self, node: dict[str, Any]) -> dict[str, Any] | None:
+    def _state(self, node: dict[str, Any]) -> dict[str, Any] | None:
+        """Запись сущности на as_of (одна на (namespace, ключ)); в выдачу не добавляет."""
         ident = (str(node.get("namespace", "")), str(node.get("natural_key", "")))
-        existing = self.entities.get(ident)
-        if existing is not None:
-            return existing
-        state = self.entity_state(node)
-        if state is not None:
-            self.entities[ident] = state
+        state = self._states.get(ident)
+        if state is None:
+            state = self.entity_state(node)
+            if state is not None:
+                self._states[ident] = state
         return state
+
+    def _admit(self, state: dict[str, Any]) -> None:
+        self.entities.setdefault((state["namespace"], state["natural_key"]), state)
 
     # --- якоря ---
 
@@ -422,14 +454,34 @@ class _Compiler:
 
         resolved: dict[tuple[int, str], list[dict[str, Any]]] = {}
         truncated: set[int] = set()
+        # Якорь -> кандидаты (namespace, ключ), отброшенные where.
+        dropped: dict[int, set[tuple[str, str]]] = {}
+        where = self.req.where
 
         def _try(i: int, ns: str, method: str, nodes: list[dict[str, Any]]) -> bool:
             nodes = self._filter_kind(nodes, names[(i, ns)])
-            hits = [st for st in (self._accept(n) for n in nodes) if st is not None]
+            # Смысловой кандидат несёт ``_match`` (score, matchedOn); первый — лучший.
+            matched: dict[int, dict[str, Any]] = {}
+            states: list[dict[str, Any]] = []
+            for node in nodes:
+                st = self._state(node)
+                if st is None:
+                    continue
+                states.append(st)
+                if isinstance(node.get("_match"), dict):
+                    matched.setdefault(id(st), node["_match"])
+            states = _unique(states)
+            # where отсекает и кандидатов, найденных по смыслу (K006 поверх K005).
+            hits = [st for st in states if where_matches(st["attributes"], where)]
+            passed = {id(st) for st in hits}
+            dropped.setdefault(i, set()).update(
+                (st["namespace"], st["natural_key"]) for st in states if id(st) not in passed
+            )
             if not hits:
                 return False
             evidence = EVIDENCE_BY_METHOD[method]
-            for state in _unique(hits):
+            for state in hits:
+                self._admit(state)
                 state["anchor"] = True
                 state.setdefault("evidence", evidence)
                 state["reached_via"].append({"anchor": anchors[i].value, "method": method})
@@ -440,6 +492,7 @@ class _Compiler:
                         "kind": state["kind"],
                         "method": method,
                         "evidence": evidence,
+                        **matched.get(id(state), {}),
                     }
                 )
             return True
@@ -526,7 +579,9 @@ class _Compiler:
                 attempts.append(
                     (
                         "semantic",
-                        lambda i=i, ns=ns: self._semantic(embedder_factory, i, ns, anchors),
+                        lambda i=i, ns=ns: self._semantic(
+                            embedder_factory, i, ns, anchors, names[(i, ns)]
+                        ),
                     )
                 )
             for method, fetch in attempts:
@@ -543,14 +598,58 @@ class _Compiler:
                 "resolved": [r for ns in nss for r in resolved.get((i, ns), [])],
             }
             _summarize(out, truncated=i in truncated)
+            if where:
+                out["filtered"] = len(dropped.get(i, ()))
             outs.append(out)
         return outs
 
-    def _semantic(self, embedder_factory, i: int, ns: str, anchors: list[AnchorRef]):
-        nodes = embedder_factory(anchors[i].value, ns)
-        self._remember(nodes)
-        self._load_versions(nodes)
-        return nodes
+    def _semantic(
+        self,
+        embedder_factory,
+        i: int,
+        ns: str,
+        anchors: list[AnchorRef],
+        kinds: set[str] | None,
+    ) -> list[dict[str, Any]]:
+        """Смысловые кандидаты якоря: сущности индекса и узлы фрагментов, лучшие первыми.
+
+        ``embedder_factory(value, ns, kinds)`` -> ``(сущности, фрагменты)``: списки
+        ``((kind | None, key), score | None)``. Сущность — узел этого вида и ключа
+        (метка вида: без просмотра всех вершин), фрагмент — узел-владелец чанка.
+        Кандидаты сливаются по ``score`` (у сущности при равенстве — приоритет),
+        фильтруются по виду якоря и режутся до ``semantic_k`` разных узлов.
+        """
+        entities, chunks = embedder_factory(anchors[i].value, ns, kinds)
+        by_label: dict[str, set[str]] = {}
+        for (kind, key), _ in entities:
+            by_label.setdefault(sanitize_label(kind), set()).add(key)
+        found = self._lookup(by_label) if by_label else {}
+        ranked: list[tuple[float, int, dict[str, Any]]] = []
+        for (kind, key), score in entities:
+            for node in found.get((ns, key), []):
+                if str(node.get("type") or "entity") == kind:
+                    ranked.append((score, 0, {**node, "_match": _match(score, "entity")}))
+        chunk_nodes = self.graph.nodes_by_keys([key for (_, key), _ in chunks], [ns])
+        self._remember(chunk_nodes)
+        self._load_versions(chunk_nodes)
+        best: dict[str, float] = {}
+        for (_, key), score in chunks:
+            best[key] = max(best.get(key, -1.0), -1.0 if score is None else score)
+        for node in chunk_nodes:
+            score = best.get(str(node.get("natural_key", "")), -1.0)
+            match = _match(None if score < 0 else score, "chunk")
+            ranked.append((score, 1, {**node, "_match": match}))
+        ranked.sort(key=lambda r: (-r[0], r[1]))
+        out: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        # Вид якоря — до среза: фрагменты чужих видов не вытесняют нужные сущности.
+        for node in self._filter_kind([r[2] for r in ranked], kinds):
+            ident = (str(node.get("type") or "entity"), str(node.get("natural_key", "")))
+            if ident in seen:
+                continue
+            seen.add(ident)
+            out.append(node)
+        return out[: self.req.semantic_k]
 
     # --- обход ---
 
@@ -563,6 +662,7 @@ class _Compiler:
         visited = set(start)
         frontier = list(start)
         reached: list[tuple[str, str]] = []
+        filtered: set[tuple[str, str]] = set()
         directions = ["out", "in"] if step.direction == "both" else [step.direction]
         for depth in range(1, step.depth + 1):
             if not frontier or len(reached) >= step.limit:
@@ -604,9 +704,14 @@ class _Compiler:
                         is_new = ident not in visited
                         if is_new and len(reached) >= step.limit:
                             continue
-                        state = self._accept(node)
+                        state = self._state(node)
                         if state is None:
                             continue
+                        if step.where and not where_matches(state["attributes"], step.where):
+                            # Не прошла фильтр шага: ни выдачи, ни факта, ни обхода дальше.
+                            filtered.add(ident)
+                            continue
+                        self._admit(state)
                         state.setdefault("evidence", "asserted")
                         self._record_fact(rel, rid, step.relation, src_key, dst_key, direction)
                         if rel_spec is not None:
@@ -625,6 +730,7 @@ class _Compiler:
                                 }
                             )
             frontier = next_frontier
+        self.filtered[step_no] = len(filtered)
         return reached
 
     @staticmethod
@@ -701,25 +807,47 @@ def compile_typed_context(
             )
         compiler.phases = phases
 
-        state: dict[str, Any] = {"embedder": embedder, "index": None}
+        state: dict[str, Any] = {"embedder": embedder, "index": None, "entities": None}
+        vectors: dict[str, list[float]] = {}
 
-        def _semantic(value: str, ns: str) -> list[dict[str, Any]]:
+        def _semantic(value: str, ns: str, kinds: set[str] | None):
+            """Смысловой поиск якоря: индекс сущностей и фрагменты (см. _Compiler._semantic)."""
             if state["index"] is None:
                 state["index"] = VectorIndex(
                     conn, settings.chunks_table, settings.embedding_dim, settings.default_namespace
                 )
-            index = state["index"]
-            if not index.table_exists():
-                return []
-            state["embedder"] = state["embedder"] or build_embedder(settings)
-            hits = index.search(
-                state["embedder"].embed_one(value),
-                value,
-                k=req.semantic_k,
-                namespaces=[ns],
-                allowed_scopes=allowed,
-            )
-            return graph.nodes_by_keys([h.node_key for h in hits], [ns])
+                ents = entity_index(conn, settings)
+                state["entities"] = ents if ents.table_exists() else False
+            index, ents = state["index"], state["entities"]
+            has_chunks = index.table_exists()
+            if not has_chunks and not ents:
+                return [], []
+            if value not in vectors:
+                state["embedder"] = state["embedder"] or build_embedder(settings)
+                vectors[value] = state["embedder"].embed_one(value)
+            entity_hits = []
+            if ents:
+                searchable = catalogs[ns].searchable_kinds()
+                wanted = set(searchable) if kinds is None else set(searchable) & kinds
+                if wanted:
+                    entity_hits = [
+                        ((h.row.kind, h.row.natural_key), h.score)
+                        for h in ents.search(
+                            vectors[value],
+                            req.semantic_k,
+                            namespaces=[ns],
+                            kinds=wanted,
+                            allowed_scopes=allowed,
+                        )
+                    ]
+            chunk_hits = []
+            if has_chunks:
+                found = index.search(
+                    vectors[value], value, k=req.semantic_k, namespaces=[ns], allowed_scopes=allowed
+                )
+                sims = index.similarities(vectors[value], [h.chunk_id for h in found])
+                chunk_hits = [((None, h.node_key), sims.get(h.chunk_id)) for h in found]
+            return entity_hits, chunk_hits
 
         with phases("anchors"):
             anchors = compiler.resolve_anchors(req.anchors, _semantic)
@@ -740,6 +868,8 @@ def compile_typed_context(
                 "from": step.start,
                 "reached": len(reached),
             }
+            if step.where:
+                report["filtered"] = compiler.filtered.get(i, 0)
             if i in compiler.edges_truncated:
                 # Рёбер уровня больше лимита чтения — часть связей не рассмотрена.
                 report["truncated"] = True
@@ -820,10 +950,16 @@ def compile_typed_context(
                 request={
                     "mode": "typed",
                     "anchors": [a["input"] for a in anchors],
-                    "traverse": steps_report,
+                    "traverse": [
+                        {**report, "where": [c.to_dict() for c in step.where]}
+                        if step.where
+                        else report
+                        for report, step in zip(steps_report, req.traverse, strict=True)
+                    ],
                     "as_of": req.as_of,
                     "namespaces": req.namespaces,
                     "allow_semantic": req.allow_semantic,
+                    **({"where": [c.to_dict() for c in req.where]} if req.where else {}),
                 },
                 decisions={"anchors": anchors, "used": pack["used"], "stats": pack["stats"]},
             )

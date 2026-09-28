@@ -382,6 +382,26 @@ class VectorIndex:
         ordered = sorted(found.values(), key=lambda h: h.score, reverse=True)
         return ordered[: int(k)]
 
+    def similarities(
+        self, query_embedding: list[float], chunk_ids: Sequence[int]
+    ) -> dict[int, float]:
+        """Косинусная близость запроса к чанкам ``chunk_ids`` (0..1): id -> близость.
+
+        Оценка ``search`` — ранг RRF, а не близость; смысловому якорю типизированного
+        обхода нужна сопоставимая с индексом сущностей величина (MEM-ADR-020).
+        """
+        ids = sorted({int(i) for i in chunk_ids})
+        if not ids:
+            return {}
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "SELECT id, 1 - (embedding <=> %s::vector) FROM {tbl} WHERE id = ANY(%s)"
+                ).format(tbl=self._tbl),
+                (query_embedding, ids),
+            )
+            return {int(r[0]): max(0.0, min(1.0, float(r[1]))) for r in cur.fetchall()}
+
     @staticmethod
     def _filters_sql(
         meta_filter: dict[str, Any] | None,

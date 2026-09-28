@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class _Forward(BaseModel):
@@ -167,14 +167,52 @@ class PackageResult(_Forward):
 
 
 class NamespaceKinds(_Forward):
-    """``GET/PUT /api/memory/namespaces/{ns}/kinds`` — kind settings + effective catalog."""
+    """``GET/PUT /api/memory/namespaces/{ns}/kinds`` — kind settings + effective catalog.
+
+    ``reindex`` (PUT only) — the entity search index rebuilt for the new catalog (kinds
+    with ``searchable``): ``{indexed, updated, removed, unchanged}`` or ``{error}``; an
+    error keeps the settings, a repeated PUT finishes the reindex.
+    """
 
     settings: dict[str, Any] = {}
     catalog: dict[str, Any] = {}
+    reindex: dict[str, Any] | None = None
+
+
+class ReconcileChanges(_Forward):
+    """Natural keys ``{kind, key}`` of nodes touched by one reconcile (MEM-ADR-020).
+
+    ``opened`` — new for the ``(source, scope)``, ``changed`` — superseded by a new
+    version, ``closed`` — gone from the snapshot. Each list holds at most ``limit``
+    keys; ``truncated`` says one of them was cut (full numbers are in ``entities``).
+    """
+
+    opened: list[dict[str, str]] = []
+    changed: list[dict[str, str]] = []
+    closed: list[dict[str, str]] = []
+    limit: int | None = None
+    truncated: bool = False
+
+
+class ReconcileConflicts(_Forward):
+    """Snapshot entities whose ``(kind, key)`` is open in the namespace by another
+    ``(source, scope)``: ``items[{kind, key, source, scope}]`` (MEM-ADR-020, 2026-09-28).
+    Information, not a rejection: each source still owns its versions."""
+
+    items: list[dict[str, str]] = []
+    limit: int | None = None
+    truncated: bool = False
 
 
 class ReconcileResult(_Forward):
-    """Response of ``POST /api/memory/reconcile`` — snapshot reconciliation counters."""
+    """Response of ``POST /api/memory/reconcile`` — snapshot reconciliation counters.
+
+    ``dry_run`` — a plan, nothing written; ``state_token`` — fingerprint of the
+    ``(source, scope)`` state: after a write the new state, for a plan the state it was
+    built on (pass it back as ``expected_state`` to apply exactly this plan).
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     source: str | None = None
     scope: str | None = None
@@ -190,7 +228,15 @@ class ReconcileResult(_Forward):
     # Plus ``pending`` (ends not yet present), ``resolved`` (pending ones linked now)
     # and ``retried`` (pending ones re-checked by this reconcile).
     relations: dict[str, int] = {}
+    # Empty lists on a duplicate: the repeat changed nothing.
+    changes: ReconcileChanges = ReconcileChanges()
     duplicate: bool = False
+    dry_run: bool = Field(default=False, alias="dryRun")
+    state_token: str | None = Field(default=None, alias="stateToken")
+    conflicts: ReconcileConflicts = ReconcileConflicts()
+    # Entity search index sync (kinds with ``searchable``): indexed/updated/removed/
+    # unchanged; absent when the namespace has no index and on ``dryRun``.
+    search_index: dict[str, int] | None = None
 
 
 class TypedContextPack(_Forward):
@@ -204,3 +250,34 @@ class TypedContextPack(_Forward):
     used: dict[str, Any] = {}
     sources: list[dict[str, Any]] = []
     trace_id: str | None = None
+
+
+class EntityItem(_Forward):
+    """An entity of ``POST /api/memory/entities:query`` — its version at ``as_of``."""
+
+    kind: str
+    key: str
+    namespace: str | None = None
+    title: str | None = None
+    attributes: dict[str, Any] = {}
+    # The snapshot source holding the version and its scope; ``source_path`` — citation.
+    source: str | None = None
+    scope: str | None = None
+    snapshot_id: str | None = None
+    source_path: str | None = None
+    valid_from: str | None = None
+    valid_to: str | None = None
+
+
+class EntitiesPage(_Forward):
+    """A page of entities in ``(kind, key, namespace)`` order (MEM-ADR-020).
+
+    The listing ends only at ``next_cursor is None``: a page may be shorter than
+    ``limit`` before the end (a rare ``where`` hits the per-request scan limit)."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    items: list[EntityItem] = []
+    next_cursor: str | None = Field(default=None, alias="nextCursor")
+    as_of: str | None = None
+    namespaces: list[str] = []

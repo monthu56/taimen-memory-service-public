@@ -168,7 +168,11 @@ Context engine routes (additive; same auth and PII barrier):
 Domain kinds as data (MEM-ADR-020; additive): the engine ships no domain in code —
 entity kinds, relations and identifier patterns come as versioned **domain packs**
 (`POST/GET /api/memory/packages`, service scope; the former business ontology is the
-built-in `default` pack in `core/packs/default.json`). A namespace can switch on strict
+built-in `default` pack in `core/packs/default.json`). A knowledge base can register its
+own **tenant pack** (`"scope": "tenant", "namespace": "<owner>"`, write grant on the
+owner): it is visible only in the owner namespace and below it, is referenced as
+`tenant:<name>[@<version>]`, and its pack, kind and relation names may not clash with
+common packs (`409` with `detail.code`). A namespace can switch on strict
 mode (`PUT /api/memory/namespaces/{ns}/kinds`) — entities of unknown kinds are then
 rejected with `422` (for snapshots, relations and their end kinds are checked too); a
 pack applies only in namespaces where it is enabled. `POST /api/memory/reconcile`
@@ -176,10 +180,20 @@ takes the pack's snapshot document as is (`pack, source, scope, snapshotId,
 observedAt, entities, relations`) and reconciles it against the same `(source, scope)`
 (opens new, supersedes changed incl. provenance, closes vanished; nothing is deleted;
 idempotent by `snapshotId`; relations to entities not yet present are kept pending
-and linked when the target arrives), and `POST /api/memory/context/typed` walks typed relations
+and linked when the target arrives; the answer lists the `{kind, key}` of opened, changed
+and closed nodes in `changes`, at most `CB_RECONCILE_CHANGES_LIMIT` (1000) per list,
+with `truncated`; `dryRun: true` returns the plan without writing, `stateToken` +
+`expectedState` apply exactly that plan or answer `409 snapshot_stale`, and
+`conflicts` lists snapshot entities another source holds open), and `POST /api/memory/context/typed` walks typed relations
 from anchors (natural key → key alias → `idPatterns`, semantic only on request) with
-`direction`/`depth`/`limit`, only over facts valid at `as_of`. New tables:
-`CB_DOMAIN_PACKS_TABLE`, `CB_NAMESPACE_SETTINGS_TABLE`, `CB_SNAPSHOTS_TABLE` (+`_items`).
+`direction`/`depth`/`limit`, only over facts valid at `as_of`; `where` filters anchor
+candidates (semantic ones too) and the entities each step reaches by attributes (`eq`,
+`in`, `prefix` by dot segments, `lte`/`gte` for numbers and ISO dates, `exists`). A pack
+kind with `searchable: {fields}` has its entities embedded (title + those attributes) on
+reconcile (not on `dryRun`) and reindexed on `PUT …/kinds`, so semantic anchors find
+them by meaning. New tables: `CB_DOMAIN_PACKS_TABLE` (+`_tenant`),
+`CB_NAMESPACE_SETTINGS_TABLE`, `CB_SNAPSHOTS_TABLE` (+`_items`, `_state`),
+`CB_ENTITY_EMBEDDINGS_TABLE` (entity embeddings of `searchable` kinds).
 
 ## Memory Console (admin UI)
 

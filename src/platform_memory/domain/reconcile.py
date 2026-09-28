@@ -44,6 +44,17 @@ fact_id ребра сверки привязан к источнику и вер
 Сверки одного namespace сериализуются advisory-локом: разрешение отложенных связей
 пересекает источники.
 
+Ответ сверки несёт, кроме счётчиков, естественные ключи узлов, которые она тронула
+(``changes``: ``opened`` — новые, ``changed`` — изменившиеся, ``closed`` — пропавшие
+из снимка; ``{kind, key}``, не больше ``limit`` в каждом списке, ``truncated`` —
+какой-то список обрезан). Повтор снимка ничего не меняет — списки пустые.
+
+Предпросмотр и применение по состоянию (амендмент 2026-09-28): ``dry_run`` строит тот
+же план в откатываемой транзакции. ``stateToken`` — отпечаток открытых версий пары
+``(source, scope)``, хранится в ``<snapshots_table>_state``; ``expected_state``, не
+совпавший с ним, — ``SnapshotStateMismatch``. ``conflicts`` — сущности снимка, открытые
+в namespace другим ``(source, scope)``.
+
 Журнал версий (``<snapshots_table>_items``) — реляционный: по нему восстанавливается
 состояние сущности на ``as_of`` и id снимков, из которых собран контекст.
 """
@@ -63,7 +74,7 @@ from psycopg.types.json import Jsonb
 
 from platform_memory.core import db as dbmod
 from platform_memory.core.config import Settings
-from platform_memory.core.kinds import KindCatalog
+from platform_memory.core.kinds import KindCatalog, split_pack_ref
 from platform_memory.core.namespaces import resolve_namespace
 from platform_memory.core.scopes import (
     MAX_ITEM_SCOPES,
@@ -71,8 +82,11 @@ from platform_memory.core.scopes import (
     resolve_scopes,
 )
 from platform_memory.domain.registry import attach_kind_guard
+from platform_memory.domain.searchable import entity_index, reconcile_lock_key, sync_entities
 from platform_memory.graph.facts import FactStore, normalize_ts
 from platform_memory.graph.store import GraphStore
+from platform_memory.index import build_embedder
+from platform_memory.index.embeddings import Embedder
 
 MAX_SOURCE_LEN = 200
 MAX_SCOPE_LEN = 200
@@ -80,6 +94,8 @@ MAX_SNAPSHOT_ID_LEN = 200
 # Служебные ключи props узла, которые пишет сверка (атрибуты их не перекрывают).
 RESERVED_PROPS = frozenset({"aliases", "snapshot", "scopes", "provenance"})
 _SEP = "\x1f"
+# Префикс stateToken: версия схемы отпечатка (смена схемы — новый префикс).
+STATE_TOKEN_PREFIX = "st1-"
 
 
 class SnapshotError(ValueError):
@@ -88,6 +104,19 @@ class SnapshotError(ValueError):
 
 class StaleSnapshotError(ValueError):
     """Снимок старше последнего принятого для (source, scope) (409)."""
+
+
+class SnapshotStateMismatch(ValueError):
+    """``expectedState`` не совпал с текущим состоянием пары (source, scope) (409
+    ``snapshot_stale``, амендмент MEM-ADR-020 2026-09-28)."""
+
+    def __init__(self, expected_state: str, state_token: str):
+        super().__init__(
+            "Состояние источника изменилось с построения плана: постройте план заново "
+            "по новому stateToken"
+        )
+        self.expected_state = expected_state
+        self.state_token = state_token
 
 
 def _now_iso() -> str:
@@ -205,15 +234,15 @@ class Snapshot:
 
 def _check_pack(ref: str, catalog: KindCatalog) -> None:
     """Пакет снимка должен быть включён в namespace (пакеты действуют только там)."""
-    name, _, version = ref.partition("@")
-    enabled = [p for p in catalog.packs if p.name == name.strip()]
+    tenant, name, version = split_pack_ref(ref)
+    enabled = [p for p in catalog.packs if p.name == name and bool(p.owner) == tenant]
     if not enabled:
         raise SnapshotError(
             f"Пакет снимка {ref!r} не включён в namespace — включите его "
             "(PUT /api/memory/namespaces/{ns}/kinds); действуют: "
             + (", ".join(p.ref for p in catalog.packs) or "—")
         )
-    if version.strip() and enabled[0].version != version.strip():
+    if version and enabled[0].version != version:
         raise SnapshotError(f"Пакет снимка {ref!r}: в namespace включена версия {enabled[0].ref}")
 
 
@@ -381,6 +410,7 @@ class SnapshotLedger:
         self.conn = conn
         self.table = table
         self.items_table = f"{table}_items"
+        self.state_table = f"{table}_state"
 
     def _t(self, name: str) -> sql.Identifier:
         return sql.Identifier("public", name)
@@ -408,6 +438,21 @@ class SnapshotLedger:
                     )
                     """
                 ).format(snaps=self._t(self.table))
+            )
+            cur.execute(
+                sql.SQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS {state} (
+                        namespace text NOT NULL,
+                        source text NOT NULL,
+                        scope text NOT NULL DEFAULT '',
+                        state_token text NOT NULL,
+                        snapshot_id text NOT NULL,
+                        updated_at timestamptz NOT NULL DEFAULT now(),
+                        PRIMARY KEY (namespace, source, scope)
+                    )
+                    """
+                ).format(state=self._t(self.state_table))
             )
             cur.execute(
                 sql.SQL(
@@ -519,6 +564,81 @@ class SnapshotLedger:
                 ),
             )
 
+    # --- состояние пары (source, scope): stateToken ---
+
+    def compute_state_token(self, ns: str, source: str, scope: str) -> str:
+        """Отпечаток открытых версий пары: id версий меняются тогда и только тогда, когда
+        сверка открыла, закрыла или заменила элемент (разрешение отложенной связи id
+        версии не трогает). У пары без версий — токен пустого состояния."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "SELECT coalesce(string_agg(version_id, ',' ORDER BY version_id), '') "
+                    "FROM {t} WHERE namespace=%s AND source=%s AND scope=%s "
+                    "AND valid_to IS NULL"
+                ).format(t=self._t(self.items_table)),
+                (ns, source, scope),
+            )
+            row = cur.fetchone()
+        raw = row[0] if row else ""
+        return STATE_TOKEN_PREFIX + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:40]
+
+    def state_token(self, ns: str, source: str, scope: str) -> str:
+        """Текущий stateToken пары: сохранённый последней принятой сверкой; у пары без
+        сохранённого (нет снимков или снимки до миграции K004) — вычисленный."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "SELECT state_token FROM {t} WHERE namespace=%s AND source=%s AND scope=%s"
+                ).format(t=self._t(self.state_table)),
+                (ns, source, scope),
+            )
+            row = cur.fetchone()
+        return row[0] if row else self.compute_state_token(ns, source, scope)
+
+    def save_state(self, ns: str, snap: Snapshot, token: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "INSERT INTO {t} (namespace, source, scope, state_token, snapshot_id) "
+                    "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (namespace, source, scope) "
+                    "DO UPDATE SET state_token = EXCLUDED.state_token, "
+                    "snapshot_id = EXCLUDED.snapshot_id, updated_at = now()"
+                ).format(t=self._t(self.state_table)),
+                (ns, snap.source, snap.scope, token, snap.snapshot_id),
+            )
+
+    def key_conflicts(
+        self, ns: str, source: str, scope: str, refs: Sequence[Ref], limit: int
+    ) -> tuple[list[dict[str, str]], bool]:
+        """Сущности ``refs``, открытые в namespace версией другого ``(source, scope)``:
+        до ``limit`` штук (по виду, ключу, источнику) и признак обрезки."""
+        limit = max(0, int(limit))
+        if not refs:
+            return [], False
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "SELECT kind, item_key, source, scope FROM {t} WHERE namespace=%s "
+                    "AND item_type='entity' AND valid_to IS NULL AND item_key = ANY(%s) "
+                    "AND (kind, item_key) IN (SELECT * FROM unnest(%s::text[], %s::text[])) "
+                    "AND NOT (source=%s AND scope=%s) "
+                    "ORDER BY kind, item_key, source, scope LIMIT %s"
+                ).format(t=self._t(self.items_table)),
+                (
+                    ns,
+                    sorted({r.key for r in refs}),
+                    [r.kind for r in refs],
+                    [r.key for r in refs],
+                    source,
+                    scope,
+                    limit + 1,
+                ),
+            )
+            rows = cur.fetchall()
+        items = [{"kind": k, "key": key, "source": src, "scope": sc} for k, key, src, sc in rows]
+        return items[:limit], len(items) > limit
+
     # --- версии элементов ---
 
     def open_items(
@@ -610,6 +730,73 @@ class SnapshotLedger:
             )
             rows = cur.fetchall()
         return [_item(r) for r in rows]
+
+    def open_entity_versions(
+        self, ns: str, kinds: Sequence[str], keys: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Открытые версии сущностей видов ``kinds`` (опц. только ключей ``keys``).
+
+        По одной на ``(kind, key)``: если сущность держат открытой несколько источников,
+        берётся самая поздняя версия. Для индекса сущностей (``domain/searchable.py``).
+        """
+        if not kinds or (keys is not None and not keys):
+            return []
+        cond = ["namespace = %s", "item_type = 'entity'", "valid_to IS NULL", "kind = ANY(%s)"]
+        args: list[Any] = [ns, sorted(set(kinds))]
+        if keys is not None:
+            cond.append("item_key = ANY(%s)")
+            args.append(sorted(set(keys)))
+        query = (
+            f"SELECT DISTINCT ON (kind, item_key) {self._ENTITY_COLS} FROM {{t}} WHERE "
+            + " AND ".join(cond)
+            + " ORDER BY kind, item_key, id DESC"
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(sql.SQL(query).format(t=self._t(self.items_table)), args)
+            return [_entity_row(r) for r in cur.fetchall()]
+
+    def entity_page(
+        self,
+        namespaces: Sequence[str],
+        kinds: Sequence[str],
+        *,
+        as_of: str = "",
+        allowed_scopes: Sequence[str] | None = None,
+        after: tuple[str, str, str] | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Страница версий сущностей видов ``kinds`` на ``as_of`` (пусто — открытые).
+
+        По одной на ``(kind, key, namespace)`` — самая поздняя из версий, валидных на
+        момент и видимых вызывающему (сущность могут держать несколько источников).
+        Порядок — ``(kind, key, namespace)`` побайтно (``COLLATE "C"``, не зависит от
+        локали базы); ``after`` — позиция курсора, строки строго после неё. Для
+        перечня сущностей (``context/entities.py``).
+        """
+        if not kinds or not namespaces:
+            return []
+        cond = ["item_type = 'entity'", "namespace = ANY(%s)", "kind = ANY(%s)"]
+        args: list[Any] = [list(namespaces), sorted(set(kinds))]
+        if as_of:
+            cond.append("valid_from <= %s AND (valid_to IS NULL OR valid_to > %s)")
+            args += [as_of, as_of]
+        else:
+            cond.append("valid_to IS NULL")
+        if allowed_scopes is not None:
+            cond.append(observation_visibility_sql("coalesce(payload->'scopes', '[]'::jsonb)"))
+            args.append(list(allowed_scopes))
+        order = 'kind COLLATE "C", item_key COLLATE "C", namespace COLLATE "C"'
+        if after is not None:
+            cond.append(f"({order}) > (%s, %s, %s)")
+            args += list(after)
+        query = (
+            f"SELECT DISTINCT ON ({order}) {self._ENTITY_COLS} FROM {{t}} WHERE "
+            + " AND ".join(cond)
+            + f" ORDER BY {order}, id DESC LIMIT %s"
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(sql.SQL(query).format(t=self._t(self.items_table)), (*args, int(limit)))
+            return [_entity_row(r) for r in cur.fetchall()]
 
     def entity_versions(
         self, namespaces: Sequence[str], keys: Sequence[str]
@@ -811,6 +998,29 @@ def valid_at(valid_from: str | None, valid_to: str | None, as_of: str) -> bool:
     return not valid_to or valid_to > as_of
 
 
+CHANGE_LISTS = ("opened", "changed", "closed")
+
+
+def changes_payload(keys: dict[str, list[Ref]], limit: int) -> dict[str, Any]:
+    """Ключи узлов, тронутых сверкой: по ``limit`` в списке (сортировка по виду и ключу).
+
+    ``truncated`` — хоть один список обрезан; полные числа — в счётчиках ``entities``.
+    """
+    limit = max(0, int(limit))
+    out: dict[str, Any] = {}
+    truncated = False
+    for name in CHANGE_LISTS:
+        refs = sorted(keys.get(name, ()), key=lambda r: (r.kind, r.key))
+        truncated = truncated or len(refs) > limit
+        out[name] = [r.to_payload() for r in refs[:limit]]
+    return {**out, "limit": limit, "truncated": truncated}
+
+
+def conflicts_payload(items: list[dict[str, str]], limit: int, truncated: bool) -> dict[str, Any]:
+    """Конфликты естественного ключа с другими ``(source, scope)`` (FR-009): сведения."""
+    return {"items": items, "limit": max(0, int(limit)), "truncated": truncated}
+
+
 def _counters(*extra: str) -> dict[str, int]:
     return {k: 0 for k in ("opened", "closed", "unchanged", "superseded", *extra)}
 
@@ -857,6 +1067,7 @@ class _Reconciler:
         self.ledger = ledger
         self.ent = _counters()
         self.rel = _counters("pending", "resolved", "retried")
+        self.keys: dict[str, list[Ref]] = {name: [] for name in CHANGE_LISTS}
         self.default_sp = f"snapshot:{snap.source}/{snap.snapshot_id}"
 
     def _version_id(self, item_type: str, kind: str, item_key: str) -> str:
@@ -937,12 +1148,16 @@ class _Reconciler:
                 closes.append((s.observed_at, s.snapshot_id, new_row[6], row.id))
                 self.ent["closed"] += 1
                 self.ent["superseded"] += 1
+                self.keys["changed"].append(e.ref)
+            else:
+                self.keys["opened"].append(e.ref)
 
         vanished = [row for (itype, _, _), row in list(open_items.items()) if itype == "entity"]
         for row in vanished:
             open_items.pop(("entity", row.kind, row.item_key), None)
             closes.append((s.observed_at, s.snapshot_id, None, row.id))
             self.ent["closed"] += 1
+            self.keys["closed"].append(Ref(row.kind, row.item_key))
 
         for kind in sorted(upserts):
             self.graph.upsert_entities(
@@ -1168,24 +1383,50 @@ def reconcile(
     scopes: Sequence[str] = (),
     actor: str = "",
     conn: psycopg.Connection | None = None,
+    embedder: Embedder | None = None,
+    dry_run: bool = False,
+    expected_state: str | None = None,
 ) -> dict[str, Any]:
     """Сверить документ снимка (формат SNAPSHOT.md) с памятью namespace; вернуть счётчики.
 
     ``scopes`` — scopes видимости (MEM-ADR-019), которые ядро выводит из задачи:
     пишутся в узлы и рёбра этого снимка (``props.scopes`` / ``r.scopes``).
 
+    Сущности видов с ``searchable`` индексируются для поиска по смыслу в той же
+    транзакции (``domain/searchable.py``): открытые и изменённые — с новым вектором,
+    закрытые — снимаются. Ошибка эмбеддера откатывает сверку целиком — индекс не
+    расходится с журналом. ``embedder`` — для тестов; по умолчанию — из настроек и
+    только если есть текст к векторизации. ``dry_run`` индекс не трогает и эмбеддер не
+    вызывает: откат транзакции не отменяет внешних вызовов, а план на большой снимок
+    стоил бы сотен запросов к эмбеддингам.
+
     Ответ: ``{opened, closed, unchanged, superseded, entities{…}, relations{…,
-    pending, resolved}, source, scope, snapshot_id, observed_at, namespace,
-    duplicate}``. Изменившийся элемент считается одновременно закрытым (старая
+    pending, resolved}, changes{opened, changed, closed, limit, truncated}, conflicts{items,
+    limit, truncated}, source, scope, snapshot_id, observed_at, namespace, duplicate,
+    dryRun, stateToken}``. Изменившийся элемент считается одновременно закрытым (старая
     версия) и открытым (новая) и попадает в ``superseded``; ``relations.pending`` —
     связи снимка, чей конец ещё не появился, ``relations.resolved`` — отложенные
-    связи (свои и чужие), материализованные этой сверкой.
+    связи (свои и чужие), материализованные этой сверкой. ``changes`` — ключи
+    ``{kind, key}`` узлов этой сверки: ``opened`` — новые для ``(source, scope)``,
+    ``changed`` — изменившиеся (их же считает ``entities.superseded``), ``closed`` —
+    пропавшие из снимка; не больше ``settings.reconcile_changes_limit`` в каждом списке.
+    ``conflicts`` — сущности снимка, открытые в namespace версией другого
+    ``(source, scope)`` (сведения, а не отказ). Журнал снимка хранит только счётчики:
+    повтор (``duplicate``) возвращает их и пустые списки — эта сверка ничего не изменила.
+
+    Амендмент MEM-ADR-020 2026-09-28: ``dry_run`` — та же сверка в транзакции, которая
+    откатывается: ответ — план на текущем состоянии, ничего не записано.
+    ``stateToken`` — отпечаток открытых версий пары ``(source, scope)``: после записи —
+    новое состояние, у ``dry_run`` — то, на котором построен план. ``expected_state``,
+    не совпавший с текущим токеном, — ``SnapshotStateMismatch`` (повтор того же
+    ``snapshotId`` его не проверяет).
     """
     ns = resolve_namespace(namespace, settings.default_namespace)
     try:
         vis_scopes = resolve_scopes(scopes, limit=MAX_ITEM_SCOPES)
     except ValueError as exc:
         raise SnapshotError(f"scopes: {exc}") from exc
+    limit = settings.reconcile_changes_limit
 
     own_conn = conn is None
     conn = conn or dbmod.connect(settings, autocommit=True)
@@ -1198,30 +1439,75 @@ def reconcile(
         ledger.ensure_schema()
         catalog = registry.catalog_for(ns)
         snap = parse_snapshot(snapshot, catalog, max_items=settings.reconcile_max_items)
+        # Индекс сущностей: есть индексируемые виды — таблица нужна; нет, но таблица
+        # есть — сверка снимает из неё закрытое (вид мог быть индексируемым раньше).
+        # Предпросмотр индекс не трогает: эмбеддер — внешний вызов, откат его не отменит.
+        index = None
+        if not dry_run:
+            index = entity_index(conn, settings)
+            if catalog.searchable_kinds():
+                index.ensure_schema()
+            elif not index.table_exists():
+                index = None
 
-        with conn.transaction():
+        # Предпросмотр идёт тем же кодом, что и запись, но его транзакция откатывается:
+        # граф, журнал, отложенные связи и запись снимка остаются как были.
+        with conn.transaction(force_rollback=dry_run):
             with conn.cursor() as cur:
                 # Весь namespace: отложенные связи разрешаются через границу источников.
                 cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (f"{graph.graph}:reconcile:{ns}",),
+                    (reconcile_lock_key(graph.graph, ns),),
                 )
+            state = ledger.state_token(ns, snap.source, snap.scope)
             stored = ledger.snapshot_result(ns, snap.source, snap.scope, snap.snapshot_id)
             if stored is not None:
-                return {**stored, "duplicate": True}
+                return {
+                    **stored,
+                    "changes": changes_payload({}, limit),
+                    "conflicts": conflicts_payload([], limit, False),
+                    "duplicate": True,
+                    "dryRun": dry_run,
+                    "stateToken": state,
+                }
+            if expected_state is not None and expected_state != state:
+                raise SnapshotStateMismatch(expected_state, state)
             last = ledger.last_observed_at(ns, snap.source, snap.scope)
             if last and snap.observed_at < last:
                 raise StaleSnapshotError(
                     f"Снимок {snap.snapshot_id!r} ({snap.observed_at}) старше последнего "
                     f"принятого для {snap.source!r}/{snap.scope!r} ({last})"
                 )
+            conflicts, conflicts_cut = ledger.key_conflicts(
+                ns, snap.source, snap.scope, [e.ref for e in snap.entities], limit
+            )
             run = _Reconciler(ns, snap, vis_scopes, catalog, graph, facts, ledger)
             open_items = ledger.open_items(ns, snap.source, snap.scope)
             seen = run.entities(open_items)
             run.relations(open_items, seen)
             result = run.result()
-            ledger.record_snapshot(ns, snap, result, actor)
-        return {**result, "duplicate": False}
+            if index is not None:
+                touched = [ref for name in CHANGE_LISTS for ref in run.keys[name]]
+                result["search_index"] = sync_entities(
+                    index,
+                    ledger,
+                    ns,
+                    catalog,
+                    lambda: embedder or build_embedder(settings),
+                    idents=[(r.kind, r.key) for r in touched],
+                )
+            if not dry_run:
+                ledger.record_snapshot(ns, snap, result, actor)
+                state = ledger.compute_state_token(ns, snap.source, snap.scope)
+                ledger.save_state(ns, snap, state)
+        return {
+            **result,
+            "changes": changes_payload(run.keys, limit),
+            "conflicts": conflicts_payload(conflicts, limit, conflicts_cut),
+            "duplicate": False,
+            "dryRun": dry_run,
+            "stateToken": state,
+        }
     finally:
         if own_conn:
             conn.close()
@@ -1233,8 +1519,11 @@ def ledger_for(settings: Settings, conn: psycopg.Connection) -> SnapshotLedger:
 
 __all__ = [
     "SnapshotError",
+    "SnapshotStateMismatch",
     "StaleSnapshotError",
     "SnapshotLedger",
+    "changes_payload",
+    "conflicts_payload",
     "parse_snapshot",
     "provenance_path",
     "reconcile",

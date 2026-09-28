@@ -55,6 +55,10 @@ def init_db() -> None:
 
         open_registry(conn, settings).ensure_schema()
         ledger_for(settings, conn).ensure_schema()
+        # Индекс эмбеддингов сущностей видов с searchable (амендмент 2026-09-28).
+        from platform_memory.domain.searchable import entity_index
+
+        entity_index(conn, settings).ensure_schema()
         typer.secho(
             f"OK: граф '{settings.graph_name}', таблицы '{settings.chunks_table}' "
             f"(dim={settings.embedding_dim}), '{settings.observations_table}' и "

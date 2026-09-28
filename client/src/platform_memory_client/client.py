@@ -54,6 +54,7 @@ from platform_memory_client.models import (
     SearchResult,
     SourceResult,
     TypedContextPack,
+    EntitiesPage,
 )
 
 DEFAULT_TIMEOUT = 10.0
@@ -80,6 +81,16 @@ class MemoryServiceError(RuntimeError):
         return self.status_code == 404
 
 
+class MemorySnapshotStaleError(MemoryServiceError):
+    """409 ``snapshot_stale`` of ``reconcile``: the ``(source, scope)`` state changed since
+    the plan (``expected_state``). Rebuild the plan from ``state_token`` (current state)."""
+
+    def __init__(self, detail: Mapping[str, Any]) -> None:
+        super().__init__(409, str(dict(detail)))
+        self.expected_state = str(detail.get("expectedState") or "")
+        self.state_token = str(detail.get("stateToken") or "")
+
+
 class MemoryTransportError(MemoryServiceError):
     """The request never got an HTTP answer (connection, timeout, protocol)."""
 
@@ -95,6 +106,14 @@ def _compact(data: Mapping[str, Any]) -> dict[str, Any]:
 # --- request specs (shared by sync + async clients) ------------------------
 
 
+def _pack_body(pack: Mapping[str, Any], tenant_namespace: str | None) -> dict[str, Any]:
+    """Pack registration body; a tenant pack adds ``scope: tenant`` and its owner."""
+    body = dict(pack)
+    if tenant_namespace is not None:
+        body.update(scope="tenant", namespace=tenant_namespace)
+    return body
+
+
 def _read_scope(
     namespaces: Sequence[str] | None, scope: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:
@@ -105,14 +124,23 @@ def _read_scope(
 
 
 def _reconcile_body(
-    snapshot: Mapping[str, Any], namespace: str | None, scopes: Sequence[str] | None
+    snapshot: Mapping[str, Any],
+    namespace: str | None,
+    scopes: Sequence[str] | None,
+    dry_run: bool = False,
+    expected_state: str | None = None,
 ) -> dict[str, Any]:
-    """Flat snapshot document + write namespace and visibility scopes (MEM-ADR-020)."""
+    """Flat snapshot document + write namespace, visibility scopes (MEM-ADR-020) and
+    the plan/apply-by-state fields (``dryRun``, ``expectedState``; sent only when set)."""
     body = dict(snapshot)
     if namespace:
         body["namespace"] = namespace
     if scopes is not None:
         body["scopes"] = list(scopes)
+    if dry_run:
+        body["dryRun"] = True
+    if expected_state is not None:
+        body["expectedState"] = expected_state
     return body
 
 
@@ -250,6 +278,12 @@ def _raise_for_status(response: httpx.Response) -> None:
         detail = response.json().get("detail", response.text)
     except Exception:  # noqa: BLE001
         detail = response.text
+    if (
+        response.status_code == 409
+        and isinstance(detail, dict)
+        and detail.get("code") == "snapshot_stale"
+    ):
+        raise MemorySnapshotStaleError(detail)
     raise MemoryServiceError(response.status_code, str(detail))
 
 
@@ -621,19 +655,41 @@ class MemoryClient:
     # Packages, namespace kinds and reconcile may be restricted to the core identity
     # (scope memory:service / CB_CORE_IDENTITIES): other callers get 403 even with a grant.
 
-    def register_package(self, pack: Mapping[str, Any]) -> PackageResult:
-        """Register a domain pack version (service scope). Versions are immutable:
-        the same content again is ``unchanged``, different content is a 409."""
-        return PackageResult.model_validate(self._post("/api/memory/packages", dict(pack)))
+    def register_package(
+        self, pack: Mapping[str, Any], *, tenant_namespace: str | None = None
+    ) -> PackageResult:
+        """Register a domain pack version. Versions are immutable: the same content
+        again is ``unchanged``, different content is a 409.
 
-    def packages(self) -> list[dict[str, Any]]:
-        """All domain packs: name, versions, latest (built-in ``default`` first)."""
-        return list(self._send("GET", "/api/memory/packages").get("packages") or [])
+        A common pack needs the service scope. With ``tenant_namespace`` the pack is a
+        tenant pack (``scope: tenant``) owned by that namespace: it needs a write grant
+        there, is visible only in it and below it and is referenced as
+        ``tenant:<name>[@<version>]``. A name clash with a common pack is a 409 with
+        ``detail.code`` (``pack_name_conflict``, ``kind_conflict``, ``relation_conflict``).
+        """
+        return PackageResult.model_validate(
+            self._post("/api/memory/packages", _pack_body(pack, tenant_namespace))
+        )
 
-    def package(self, name: str, *, version: str | None = None) -> dict[str, Any]:
-        """One pack version (latest when ``version`` is omitted)."""
+    def packages(self, *, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Common domain packs: name, versions, latest (built-in ``default`` first);
+        with ``namespace`` also the tenant packs visible there."""
+        return list(
+            self._send(
+                "GET", "/api/memory/packages", params=_compact({"namespace": namespace})
+            ).get("packages")
+            or []
+        )
+
+    def package(
+        self, name: str, *, version: str | None = None, namespace: str | None = None
+    ) -> dict[str, Any]:
+        """One pack version (latest when ``version`` is omitted). A tenant pack is
+        ``tenant:<name>`` and needs the ``namespace`` it is visible in."""
         return self._send(
-            "GET", f"/api/memory/packages/{name}", params=_compact({"version": version})
+            "GET",
+            f"/api/memory/packages/{name}",
+            params=_compact({"version": version, "namespace": namespace}),
         )
 
     def namespace_kinds(self, namespace: str) -> NamespaceKinds:
@@ -645,7 +701,10 @@ class MemoryClient:
     def set_namespace_kinds(
         self, namespace: str, *, strict: bool, packages: Sequence[str] | None = None
     ) -> NamespaceKinds:
-        """Turn strict mode on/off and pin the packages of a namespace."""
+        """Turn strict mode on/off and pin the packages of a namespace.
+
+        Entities of kinds with ``searchable`` are reindexed for semantic search
+        (``reindex`` in the result)."""
         body = {"strict": strict, "packages": list(packages) if packages is not None else None}
         return NamespaceKinds.model_validate(
             self._send("PUT", f"/api/memory/namespaces/{namespace}/kinds", json=body)
@@ -657,15 +716,19 @@ class MemoryClient:
         *,
         namespace: str | None = None,
         scopes: Sequence[str] | None = None,
+        dry_run: bool = False,
+        expected_state: str | None = None,
     ) -> ReconcileResult:
         """Reconcile a full source snapshot document as is (the pack's SNAPSHOT.md format:
         ``pack, source, scope, snapshotId, observedAt, entities, relations``).
 
         Idempotent by ``(namespace, source, scope, snapshotId)``. ``scopes`` are
-        visibility scopes (MEM-ADR-019) written onto the snapshot's nodes and edges."""
-        return ReconcileResult.model_validate(
-            self._post("/api/memory/reconcile", _reconcile_body(snapshot, namespace, scopes))
-        )
+        visibility scopes (MEM-ADR-019) written onto the snapshot's nodes and edges.
+        ``dry_run`` builds the plan without writing; ``expected_state`` (the plan's
+        ``state_token``) applies only if the ``(source, scope)`` state did not change
+        since, else :class:`MemorySnapshotStaleError`."""
+        body = _reconcile_body(snapshot, namespace, scopes, dry_run, expected_state)
+        return ReconcileResult.model_validate(self._post("/api/memory/reconcile", body))
 
     def typed_context(
         self,
@@ -676,7 +739,15 @@ class MemoryClient:
         allowed_namespaces: Sequence[str] | None = None,
         allowed_scopes: Sequence[str] | None = None,
     ) -> TypedContextPack:
-        """Typed traversal: anchors -> relations (direction/depth/limit) at ``as_of``."""
+        """Typed traversal: anchors -> relations (direction/depth/limit) at ``as_of``.
+
+        With ``allow_semantic`` an anchor may resolve by meaning: via the entity index
+        (kinds with ``searchable``) or a document chunk — ``method: semantic``,
+        ``matchedOn: entity | chunk`` and ``score`` (cosine, 0..1).
+        ``request["where"]`` filters anchor candidates (semantic ones too),
+        ``traverse[i]["where"]`` — the entities a step reaches
+        (``eq``/``in``/``prefix``/``lte``/``gte``/``exists``); both are sent as is.
+        Filtered anchors carry ``filtered``."""
         return TypedContextPack.model_validate(
             self._post(
                 "/api/memory/context/typed",
@@ -685,6 +756,38 @@ class MemoryClient:
                     _read_scope(namespaces),
                 ),
                 _run_headers(run_id),
+            )
+        )
+
+    def query_entities(
+        self,
+        kinds: Sequence[str],
+        *,
+        namespaces: Sequence[str] | None = None,
+        where: Sequence[Mapping[str, Any]] | None = None,
+        as_of: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        allowed_namespaces: Sequence[str] | None = None,
+        allowed_scopes: Sequence[str] | None = None,
+    ) -> EntitiesPage:
+        """Entities of ``kinds`` at ``as_of`` (empty — open now) filtered by ``where``
+        (``eq``/``in``/``prefix``/``lte``/``gte``/``exists``), ordered by
+        ``(kind, key, namespace)``. Pass ``next_cursor`` back as ``cursor`` for the next
+        page; the listing ends at ``next_cursor is None``. An unknown kind is empty."""
+        return EntitiesPage.model_validate(
+            self._post(
+                "/api/memory/entities:query",
+                _entities_body(
+                    kinds,
+                    namespaces,
+                    where,
+                    as_of,
+                    limit,
+                    cursor,
+                    allowed_namespaces,
+                    allowed_scopes,
+                ),
             )
         )
 
@@ -1019,15 +1122,30 @@ class AsyncMemoryClient:
             )
         )
 
-    async def register_package(self, pack: Mapping[str, Any]) -> PackageResult:
-        return PackageResult.model_validate(await self._post("/api/memory/packages", dict(pack)))
+    async def register_package(
+        self, pack: Mapping[str, Any], *, tenant_namespace: str | None = None
+    ) -> PackageResult:
+        return PackageResult.model_validate(
+            await self._post("/api/memory/packages", _pack_body(pack, tenant_namespace))
+        )
 
-    async def packages(self) -> list[dict[str, Any]]:
-        return list((await self._send("GET", "/api/memory/packages")).get("packages") or [])
+    async def packages(self, *, namespace: str | None = None) -> list[dict[str, Any]]:
+        return list(
+            (
+                await self._send(
+                    "GET", "/api/memory/packages", params=_compact({"namespace": namespace})
+                )
+            ).get("packages")
+            or []
+        )
 
-    async def package(self, name: str, *, version: str | None = None) -> dict[str, Any]:
+    async def package(
+        self, name: str, *, version: str | None = None, namespace: str | None = None
+    ) -> dict[str, Any]:
         return await self._send(
-            "GET", f"/api/memory/packages/{name}", params=_compact({"version": version})
+            "GET",
+            f"/api/memory/packages/{name}",
+            params=_compact({"version": version, "namespace": namespace}),
         )
 
     async def namespace_kinds(self, namespace: str) -> NamespaceKinds:
@@ -1049,10 +1167,11 @@ class AsyncMemoryClient:
         *,
         namespace: str | None = None,
         scopes: Sequence[str] | None = None,
+        dry_run: bool = False,
+        expected_state: str | None = None,
     ) -> ReconcileResult:
-        return ReconcileResult.model_validate(
-            await self._post("/api/memory/reconcile", _reconcile_body(snapshot, namespace, scopes))
-        )
+        body = _reconcile_body(snapshot, namespace, scopes, dry_run, expected_state)
+        return ReconcileResult.model_validate(await self._post("/api/memory/reconcile", body))
 
     async def typed_context(
         self,
@@ -1073,6 +1192,58 @@ class AsyncMemoryClient:
                 _run_headers(run_id),
             )
         )
+
+    async def query_entities(
+        self,
+        kinds: Sequence[str],
+        *,
+        namespaces: Sequence[str] | None = None,
+        where: Sequence[Mapping[str, Any]] | None = None,
+        as_of: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        allowed_namespaces: Sequence[str] | None = None,
+        allowed_scopes: Sequence[str] | None = None,
+    ) -> EntitiesPage:
+        return EntitiesPage.model_validate(
+            await self._post(
+                "/api/memory/entities:query",
+                _entities_body(
+                    kinds,
+                    namespaces,
+                    where,
+                    as_of,
+                    limit,
+                    cursor,
+                    allowed_namespaces,
+                    allowed_scopes,
+                ),
+            )
+        )
+
+
+def _entities_body(
+    kinds: Sequence[str],
+    namespaces: Sequence[str] | None,
+    where: Sequence[Mapping[str, Any]] | None,
+    as_of: str | None,
+    limit: int | None,
+    cursor: str | None,
+    allowed_namespaces: Sequence[str] | None,
+    allowed_scopes: Sequence[str] | None,
+) -> dict[str, Any]:
+    body = _compact(
+        {
+            "kinds": list(kinds),
+            "where": [dict(c) for c in where] if where is not None else None,
+            "asOf": as_of,
+            "limit": limit,
+            "cursor": cursor,
+        }
+    )
+    return _context_spec(
+        _with_visibility(body, allowed_namespaces, allowed_scopes), _read_scope(namespaces)
+    )
 
 
 def _with_visibility(

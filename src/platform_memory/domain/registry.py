@@ -13,12 +13,21 @@
 один namespace не влияет.
 ``strict=True`` — сущность неизвестного вида отвергается (``UnknownKindError``);
 иначе прежнее поведение (любой вид допустим).
+
+Пакеты арендатора (амендмент MEM-ADR-020 2026-09-28) — отдельная таблица
+``<packs>_tenant`` с владельцем: строка ``(owner, name, version)``. Пакет владельца ``O``
+виден в namespace ``N``, если ``N == O`` или ``N`` начинается с ``O:`` (иерархия грантов
+ADR-017); ссылка на него — ``tenant:<имя>[@<версия>]``. Если имя есть у нескольких
+видимых владельцев, ссылка разрешается к ближайшему (самому длинному) владельцу. Имена
+пакета, видов и связей арендатора не совпадают с общими пакетами
+(``PackScopeConflictError`` при регистрации и при включении в namespace).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,12 +36,14 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from platform_memory.core.kinds import (
+    BASE_KINDS,
     DEFAULT_PACK_NAME,
     DomainPack,
     KindCatalog,
     PackError,
     default_pack,
     parse_pack,
+    split_pack_ref,
     version_key,
 )
 from platform_memory.core.namespaces import resolve_namespace, validate_namespace
@@ -44,6 +55,60 @@ class PackConflictError(ValueError):
 
 class PackNotFoundError(LookupError):
     """Пакет/версия не зарегистрированы."""
+
+
+class PackScopeConflictError(PackConflictError):
+    """Имя пакета, вида или связи арендатора совпало с общим пакетом (409 с ``code``).
+
+    ``code`` — ``pack_name_conflict``, ``kind_conflict`` или ``relation_conflict``.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def visible_owners(namespace: str) -> list[str]:
+    """Владельцы, чьи пакеты арендатора видны в namespace: сам он и его префиксы по ``:``.
+
+    ``tenant:t:ws:w`` -> ``[tenant, tenant:t, tenant:t:ws, tenant:t:ws:w]`` — от дальнего
+    к ближайшему.
+    """
+    parts = namespace.split(":") if namespace else []
+    return [":".join(parts[: i + 1]) for i in range(len(parts))]
+
+
+def _pack_names(packs: Iterable[DomainPack]) -> tuple[set[str], set[str]]:
+    """Имена видов (с псевдонимами) и связей пакетов."""
+    kinds: set[str] = set()
+    relations: set[str] = set()
+    for pack in packs:
+        for spec in pack.kinds:
+            kinds.add(spec.kind)
+            kinds.update(spec.kind_aliases)
+        relations.update(rel.relation for rel in pack.relations)
+    return kinds, relations
+
+
+def _check_against_common(
+    pack: DomainPack, kinds: set[str], relations: set[str], where: str
+) -> None:
+    """Виды и связи пакета арендатора не совпадают с именами общих пакетов."""
+    own_kinds, own_relations = _pack_names([pack])
+    clash = sorted(own_kinds & (kinds | BASE_KINDS))
+    if clash:
+        raise PackScopeConflictError(
+            "kind_conflict",
+            f"Пакет {pack.ref}: виды {clash} совпадают с видами общих пакетов ({where}); "
+            "переименуйте вид",
+        )
+    clash = sorted(own_relations & relations)
+    if clash:
+        raise PackScopeConflictError(
+            "relation_conflict",
+            f"Пакет {pack.ref}: связи {clash} совпадают со связями общих пакетов ({where}); "
+            "переименуйте связь",
+        )
 
 
 @dataclass(slots=True)
@@ -70,6 +135,16 @@ def _spec_hash(pack: DomainPack) -> str:
     return hashlib.sha256(pack.canonical_json().encode("utf-8")).hexdigest()
 
 
+def pack_payload(pack: DomainPack) -> dict[str, Any]:
+    """Пакет для ответа API: спецификация + ``scope``, ``namespace`` (владелец), ``ref``."""
+    out = pack.to_payload()
+    out["scope"] = "tenant" if pack.owner else "common"
+    if pack.owner:
+        out["namespace"] = pack.owner
+    out["ref"] = pack.ref
+    return out
+
+
 class KindRegistry:
     """Реестр пакетов видов и настроек namespace поверх двух таблиц Postgres."""
 
@@ -84,7 +159,9 @@ class KindRegistry:
         self.packs_table = packs_table
         self.settings_table = settings_table
         self.default_namespace = resolve_namespace(default_namespace)
+        self.tenant_table = f"{packs_table}_tenant"
         self._exists: bool | None = None
+        self._tenant_exists: bool | None = None
         self._catalogs: dict[str, KindCatalog] = {}
 
     def _tbl(self, name: str) -> sql.Identifier:
@@ -123,7 +200,24 @@ class KindRegistry:
                     """
                 ).format(settings=self._tbl(self.settings_table))
             )
+            cur.execute(
+                sql.SQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS {tenant} (
+                        owner text NOT NULL,
+                        name text NOT NULL,
+                        version text NOT NULL,
+                        spec jsonb NOT NULL,
+                        spec_hash text NOT NULL,
+                        registered_by text NOT NULL DEFAULT '',
+                        registered_at timestamptz NOT NULL DEFAULT now(),
+                        PRIMARY KEY (owner, name, version)
+                    )
+                    """
+                ).format(tenant=self._tbl(self.tenant_table))
+            )
         self._exists = True
+        self._tenant_exists = True
         self._catalogs.clear()
 
     def table_exists(self) -> bool:
@@ -136,6 +230,14 @@ class KindRegistry:
                 row = cur.fetchone()
             self._exists = bool(row and row[0])
         return self._exists
+
+    def tenant_table_exists(self) -> bool:
+        if self._tenant_exists is None:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT to_regclass(%s) IS NOT NULL", (f"public.{self.tenant_table}",))
+                row = cur.fetchone()
+            self._tenant_exists = bool(row and row[0])
+        return self._tenant_exists
 
     # --- пакеты ---
 
@@ -171,7 +273,87 @@ class KindRegistry:
                             "версия пакета иммутабельна — выпустите новую"
                         )
         self._catalogs.clear()
-        return {"status": "created" if created else "unchanged", "pack": pack.to_payload()}
+        return {"status": "created" if created else "unchanged", "pack": pack_payload(pack)}
+
+    def _common_packs(self) -> list[DomainPack]:
+        """Все версии всех общих пакетов, встроенный default — первым."""
+        packs = [default_pack()]
+        if self.table_exists():
+            with self.conn.cursor() as cur:
+                cur.execute(sql.SQL("SELECT spec FROM {t}").format(t=self._tbl(self.packs_table)))
+                packs.extend(parse_pack(row[0]) for row in cur.fetchall())
+        return packs
+
+    def register_tenant(
+        self, payload: dict[str, Any] | DomainPack, *, owner: str, registered_by: str = ""
+    ) -> dict:
+        """Зарегистрировать версию пакета арендатора ``owner``; ``{status, pack}``.
+
+        Версия иммутабельна в пределах ``(owner, name)``. Имя пакета, виды (с
+        ``kindAliases``) и связи не должны совпадать с любыми версиями общих пакетов,
+        включая встроенный ``default`` и базовые виды, — иначе ``PackScopeConflictError``.
+        """
+        owner = validate_namespace(owner)
+        if isinstance(payload, dict):
+            # Базовый вид отверг бы разбор пакета (400); у арендатора это совпадение
+            # с общим видом — тот же 409 kind_conflict, что и для видов общих пакетов.
+            raw_kinds = payload.get("kinds")
+            for raw in raw_kinds if isinstance(raw_kinds, list) else []:
+                if not isinstance(raw, dict):
+                    continue
+                aliases = raw.get("kindAliases", raw.get("kind_aliases"))
+                names = [raw.get("kind"), *(aliases if isinstance(aliases, list) else [])]
+                clash = sorted({n for n in names if isinstance(n, str) and n in BASE_KINDS})
+                if clash:
+                    raise PackScopeConflictError(
+                        "kind_conflict", f"Виды {clash} — базовые; переименуйте вид"
+                    )
+        pack = payload if isinstance(payload, DomainPack) else parse_pack(payload)
+        pack = dataclasses.replace(pack, owner=owner)
+        common = self._common_packs()
+        if pack.name in {p.name for p in common}:
+            raise PackScopeConflictError(
+                "pack_name_conflict",
+                f"Имя пакета {pack.name!r} занято общим пакетом; выберите другое",
+            )
+        kinds, relations = _pack_names(common)
+        _check_against_common(pack, kinds, relations, "реестр")
+        self.ensure_schema()
+        digest = _spec_hash(pack)
+        with self.conn.transaction():
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL(
+                        "INSERT INTO {t} (owner, name, version, spec, spec_hash, registered_by) "
+                        "VALUES (%s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (owner, name, version) DO NOTHING RETURNING name"
+                    ).format(t=self._tbl(self.tenant_table)),
+                    (
+                        owner,
+                        pack.name,
+                        pack.version,
+                        Jsonb(pack.to_payload()),
+                        digest,
+                        registered_by,
+                    ),
+                )
+                created = cur.fetchone() is not None
+                if not created:
+                    cur.execute(
+                        sql.SQL(
+                            "SELECT spec_hash FROM {t} "
+                            "WHERE owner = %s AND name = %s AND version = %s"
+                        ).format(t=self._tbl(self.tenant_table)),
+                        (owner, pack.name, pack.version),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] != digest:
+                        raise PackConflictError(
+                            f"Версия {pack.ref} владельца {owner!r} уже зарегистрирована "
+                            "с другим содержимым; версия пакета иммутабельна — выпустите новую"
+                        )
+        self._catalogs.clear()
+        return {"status": "created" if created else "unchanged", "pack": pack_payload(pack)}
 
     def _versions(self, name: str) -> list[tuple[str, dict[str, Any], str, str]]:
         if not self.table_exists():
@@ -202,8 +384,71 @@ class KindRegistry:
             raise PackNotFoundError(f"Пакет {ref} не найден")
         return parse_pack(rows[-1][1])
 
-    def list_packs(self) -> list[dict[str, Any]]:
-        """Все пакеты: имя, версии по возрастанию, последняя; встроенный default первым."""
+    def _tenant_rows(self, namespace: str, name: str = "") -> list[tuple[str, str, str, Any]]:
+        """Строки ``(owner, name, version, spec)`` пакетов арендатора, видимых в namespace."""
+        if not namespace or not self.tenant_table_exists():
+            return []
+        query = sql.SQL("SELECT owner, name, version, spec FROM {t} WHERE owner = ANY(%s)").format(
+            t=self._tbl(self.tenant_table)
+        )
+        params: list[Any] = [visible_owners(namespace)]
+        if name:
+            query += sql.SQL(" AND name = %s")
+            params.append(name)
+        with self.conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+    def get_tenant(self, name: str, version: str = "", *, namespace: str) -> DomainPack:
+        """Версия пакета арендатора, видимого в namespace (пусто — последняя).
+
+        Невидимый пакет не отличается от несуществующего: ``PackNotFoundError`` (404).
+        """
+        ns = resolve_namespace(namespace, self.default_namespace)
+        ref = f"tenant:{name}@{version}" if version else f"tenant:{name}"
+        rows = self._tenant_rows(ns, name)
+        if not rows:
+            raise PackNotFoundError(f"Пакет {ref} не найден в namespace {ns!r}")
+        # Ближайший владелец: namespace ближе к ns — длиннее.
+        owner = max((r[0] for r in rows), key=len)
+        rows = sorted((r for r in rows if r[0] == owner), key=lambda r: version_key(r[2]))
+        if version:
+            rows = [r for r in rows if r[2] == version]
+        if not rows:
+            raise PackNotFoundError(f"Пакет {ref} не найден в namespace {ns!r}")
+        return dataclasses.replace(parse_pack(rows[-1][3]), owner=owner)
+
+    def list_packs(self, namespace: str | None = None) -> list[dict[str, Any]]:
+        """Общие пакеты: имя, версии по возрастанию, последняя; встроенный default первым.
+
+        С ``namespace`` — ещё пакеты арендатора, видимые в нём (после общих).
+        """
+        out = self._common_list()
+        if namespace:
+            out.extend(self._tenant_list(resolve_namespace(namespace, self.default_namespace)))
+        return out
+
+    def _tenant_list(self, namespace: str) -> list[dict[str, Any]]:
+        by_key: dict[tuple[str, str], list[str]] = {}
+        for owner, name, version, _spec in self._tenant_rows(namespace):
+            by_key.setdefault((name, owner), []).append(version)
+        out = []
+        for name, owner in sorted(by_key):
+            versions = sorted(by_key[(name, owner)], key=version_key)
+            out.append(
+                {
+                    "name": name,
+                    "versions": versions,
+                    "latest": versions[-1],
+                    "builtin": False,
+                    "scope": "tenant",
+                    "namespace": owner,
+                    "ref": f"tenant:{name}",
+                }
+            )
+        return out
+
+    def _common_list(self) -> list[dict[str, Any]]:
         builtin = default_pack()
         out: list[dict[str, Any]] = [
             {
@@ -211,6 +456,8 @@ class KindRegistry:
                 "versions": [builtin.version],
                 "latest": builtin.version,
                 "builtin": True,
+                "scope": "common",
+                "ref": builtin.name,
             }
         ]
         if not self.table_exists():
@@ -226,13 +473,22 @@ class KindRegistry:
         for name in sorted(by_name):
             versions = sorted(by_name[name], key=version_key)
             out.append(
-                {"name": name, "versions": versions, "latest": versions[-1], "builtin": False}
+                {
+                    "name": name,
+                    "versions": versions,
+                    "latest": versions[-1],
+                    "builtin": False,
+                    "scope": "common",
+                    "ref": name,
+                }
             )
         return out
 
-    def _resolve_ref(self, ref: str) -> DomainPack:
-        name, _, version = ref.partition("@")
-        return self.get(name.strip(), version.strip())
+    def _resolve_ref(self, ref: str, namespace: str) -> DomainPack:
+        tenant, name, version = split_pack_ref(ref)
+        if tenant:
+            return self.get_tenant(name, version, namespace=namespace)
+        return self.get(name, version)
 
     # --- настройки namespace ---
 
@@ -268,13 +524,22 @@ class KindRegistry:
         packages: Sequence[str] | None = None,
         updated_by: str = "",
     ) -> NamespaceKindSettings:
-        """Задать настройку видов namespace; ссылки на пакеты проверяются сразу."""
+        """Задать настройку видов namespace; ссылки на пакеты проверяются сразу.
+
+        Пакет арендатора, не видимый в namespace, — ``PackNotFoundError``. Вид или
+        связь пакета арендатора, совпавшие с включаемым рядом общим пакетом (общий
+        зарегистрирован позже арендатора), — ``PackScopeConflictError``.
+        """
         ns = validate_namespace(resolve_namespace(namespace, self.default_namespace))
         refs = None
         if packages is not None:
             refs = list(dict.fromkeys(str(p).strip() for p in packages if str(p).strip()))
-            for ref in refs:
-                self._resolve_ref(ref)  # PackNotFoundError, если ссылки нет
+            # PackNotFoundError, если ссылки нет
+            packs = [self._resolve_ref(ref, ns) for ref in refs]
+            kinds, relations = _pack_names(p for p in packs if not p.owner)
+            for pack in packs:
+                if pack.owner:
+                    _check_against_common(pack, kinds, relations, f"namespace {ns!r}")
         self.ensure_schema()
         with self.conn.cursor() as cur:
             cur.execute(
@@ -302,7 +567,7 @@ class KindRegistry:
             # Пакет действует только там, где явно включён (MEM-ADR-020, амендмент).
             packs = [default_pack()]
         else:
-            packs = [self._resolve_ref(ref) for ref in conf.packages]
+            packs = [self._resolve_ref(ref, ns) for ref in conf.packages]
         catalog = KindCatalog.build(packs, strict=conf.strict)
         self._catalogs[ns] = catalog
         return catalog

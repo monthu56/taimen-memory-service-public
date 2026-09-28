@@ -433,6 +433,9 @@ class TestTypedTraversal:
         opened = _typed(settings, chain, anchors=anchor, allow_semantic=True, semantic_k=1)
         (resolved,) = opened["anchors"][0]["resolved"]
         assert resolved["method"] == "semantic" and resolved["evidence"] == "inferred"
+        # Найдено по фрагменту документа; близость — косинус, 0..1 (K005).
+        assert resolved["matchedOn"] == "chunk"
+        assert 0.0 < resolved["score"] <= 1.0
         item = opened["sections"][0]["items"][0]
         assert item["evidence"] == "inferred"
 

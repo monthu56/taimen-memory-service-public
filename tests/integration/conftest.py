@@ -46,9 +46,12 @@ def _tables(settings: Settings) -> tuple[str, ...]:
         settings.observations_table,
         settings.context_traces_table,
         settings.domain_packs_table,
+        f"{settings.domain_packs_table}_tenant",
         settings.namespace_settings_table,
         settings.snapshots_table,
         f"{settings.snapshots_table}_items",
+        f"{settings.snapshots_table}_state",
+        settings.entity_embeddings_table,
     )
 
 
@@ -66,6 +69,7 @@ def settings() -> Settings:
         domain_packs_table=f"packs_{suffix}",
         namespace_settings_table=f"nssettings_{suffix}",
         snapshots_table=f"snaps_{suffix}",
+        entity_embeddings_table=f"entemb_{suffix}",
         default_namespace="nexus",
         embedding_provider="fake",
         embedding_dim=64,

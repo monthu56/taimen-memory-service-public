@@ -109,6 +109,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
             open_registry(conn, settings).ensure_schema()
             ledger_for(settings, conn).ensure_schema()
+            # Индекс эмбеддингов сущностей видов с searchable (амендмент 2026-09-28).
+            from platform_memory.domain.searchable import entity_index
+
+            entity_index(conn, settings).ensure_schema()
         finally:
             conn.close()
     except Exception:  # noqa: BLE001

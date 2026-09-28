@@ -34,4 +34,6 @@ async with AsyncMemoryClient("http://memory-service:8077", token=cred) as mem:
 
 Errors: `MemoryServiceError` (`status_code`, `detail`, and the `unavailable` (5xx)
 and `not_found` properties), `MemoryTransportError` — no response was received
-(`status_code == 0`).
+(`status_code == 0`), `MemorySnapshotStaleError` — `reconcile(..., expected_state=…)`
+found the `(source, scope)` state changed since the `dry_run` plan (`409
+snapshot_stale`; `state_token` is the current state to rebuild the plan from).

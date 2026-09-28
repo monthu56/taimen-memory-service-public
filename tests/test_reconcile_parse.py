@@ -15,7 +15,9 @@ import pytest
 
 from platform_memory.core.kinds import KindCatalog, UnknownRelationError, parse_pack
 from platform_memory.domain.reconcile import (
+    Ref,
     SnapshotError,
+    changes_payload,
     fact_id_for_version,
     parse_snapshot,
     provenance_path,
@@ -124,3 +126,26 @@ def test_provenance_path_and_fact_id_bound_to_source():
     assert a == fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s1")
     assert a != fact_id_for_version("ns", "git:b", "a", "calls\x1fx", "s1")
     assert a != fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s2")
+
+
+def test_changes_payload_sorted_limited_and_flags_truncation():
+    keys = {
+        "opened": [Ref("endpoint", "b"), Ref("adr", "z"), Ref("endpoint", "a")],
+        "closed": [Ref("adr", "x")],
+    }
+    out = changes_payload(keys, 2)
+    assert out == {
+        "opened": [{"kind": "adr", "key": "z"}, {"kind": "endpoint", "key": "a"}],
+        "changed": [],
+        "closed": [{"kind": "adr", "key": "x"}],
+        "limit": 2,
+        "truncated": True,
+    }
+    assert changes_payload(keys, 3)["truncated"] is False
+    assert changes_payload({}, 5) == {
+        "opened": [],
+        "changed": [],
+        "closed": [],
+        "limit": 5,
+        "truncated": False,
+    }

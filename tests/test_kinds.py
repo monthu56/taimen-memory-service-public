@@ -257,3 +257,18 @@ class TestDefaultPackReplacesOntologyCode:
         assert ontology.id_type("PROJ-42", cat) == "issue"
         assert not ontology.is_natural_id("T-001", cat)  # T- — шаблон default, не tracker
         assert default_catalog().id_kind("BIZ-010") == "decision"
+
+
+def test_tenant_pack_ref_and_split() -> None:
+    """K007: пакет арендатора адресуется ``tenant:<имя>[@<версия>]``; владелец не в хэше."""
+    import dataclasses
+
+    from platform_memory.core.kinds import split_pack_ref
+
+    pack = parse_pack({"name": "fleet", "version": 1, "kinds": [{"kind": "vehicle"}]})
+    owned = dataclasses.replace(pack, owner="tenant:t1")
+    assert (pack.ref, owned.ref, owned.ref_name) == ("fleet@1", "tenant:fleet@1", "tenant:fleet")
+    assert owned.canonical_json() == pack.canonical_json()
+    assert split_pack_ref("tenant:fleet@1") == (True, "fleet", "1")
+    assert split_pack_ref(" tenant:fleet ") == (True, "fleet", "")
+    assert split_pack_ref("fleet@2") == (False, "fleet", "2")

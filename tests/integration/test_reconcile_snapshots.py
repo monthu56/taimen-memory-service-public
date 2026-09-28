@@ -27,7 +27,12 @@ import pytest
 from platform_memory.context.typed import compile_typed_context
 from platform_memory.core.db import agtype
 from platform_memory.core.kinds import UnknownRelationError
-from platform_memory.domain.reconcile import SnapshotError, SnapshotLedger, reconcile
+from platform_memory.domain.reconcile import (
+    SnapshotError,
+    SnapshotLedger,
+    SnapshotStateMismatch,
+    reconcile,
+)
 from platform_memory.domain.registry import open_registry
 from platform_memory.graph import store as store_mod
 
@@ -249,6 +254,62 @@ class TestRealSnapshots:
         node = graph.get_node(CHECKPOINTS, namespaces=[NS])
         assert node["props"]["provenance"]["line"] == 205
         assert node["source_path"].endswith("runs.py:205")
+
+    def test_changes_carry_node_keys(self, stores, settings, registry, cp):
+        """Амендмент MEM-ADR-020 «изменённые ключи»: новый, изменённый и пропавший узел —
+        каждый в своём списке; повтор снимка — пустые списки."""
+        conn = stores[0]
+        first = _run(settings, conn, cp)
+        everything = sorted(
+            ({"kind": e["kind"], "key": e["key"]} for e in cp["entities"]),
+            key=lambda r: (r["kind"], r["key"]),
+        )
+        assert first["changes"] == {
+            "opened": everything,
+            "changed": [],
+            "closed": [],
+            "limit": settings.reconcile_changes_limit,
+            "truncated": False,
+        }
+        # Прежние поля ответа не меняются.
+        assert first["entities"]["opened"] == len(cp["entities"])
+
+        nxt = _next(cp, "control-plane@2", "2026-09-24T08:00:00Z")
+        gone = next(e for e in nxt["entities"] if e["kind"] == "adr")
+        nxt["entities"].remove(gone)
+        nxt["relations"] = [
+            r for r in nxt["relations"] if gone["key"] not in (r["from"]["key"], r["to"]["key"])
+        ]
+        moved = next(e for e in nxt["entities"] if e["key"] == CHECKPOINTS)
+        moved["provenance"]["line"] = 205
+        added = {**copy.deepcopy(moved), "key": CHECKPOINTS + "/latest", "title": "latest"}
+        nxt["entities"].append(added)
+        result = _run(settings, conn, nxt)
+        assert result["changes"] == {
+            "opened": [{"kind": "endpoint", "key": added["key"]}],
+            "changed": [{"kind": "endpoint", "key": CHECKPOINTS}],
+            "closed": [{"kind": "adr", "key": gone["key"]}],
+            "limit": settings.reconcile_changes_limit,
+            "truncated": False,
+        }
+        assert (result["entities"]["opened"], result["entities"]["closed"]) == (2, 2)
+        assert result["entities"]["superseded"] == 1
+
+        empty = {"opened": [], "changed": [], "closed": []}
+        again = _run(settings, conn, nxt)
+        assert again["duplicate"] is True
+        assert {k: again["changes"][k] for k in empty} == empty
+        assert again["entities"] == result["entities"]  # счётчики — сохранённые
+        same = _run(settings, conn, _next(nxt, "control-plane@3", "2026-09-25T08:00:00Z"))
+        assert {k: same["changes"][k] for k in empty} == empty
+        assert same["changes"]["truncated"] is False
+
+    def test_changes_truncated_by_limit(self, stores, settings, registry, cp):
+        limited = settings.model_copy(update={"reconcile_changes_limit": 3})
+        result = _run(limited, stores[0], cp)
+        assert len(result["changes"]["opened"]) == 3
+        assert result["changes"]["truncated"] is True
+        assert result["entities"]["opened"] == len(cp["entities"])
 
     def test_source_scope_isolation(self, stores, settings, registry, cp, web):
         conn, graph, facts, _, _ = stores
@@ -617,6 +678,154 @@ class TestLabelIndexes:
         ]
 
 
+EMPTY = {"opened": [], "changed": [], "closed": []}
+
+
+def _ledger_rows(conn, settings) -> tuple[int, int, int]:
+    """Строки журнала: снимки, версии элементов, состояния пар."""
+    t = settings.snapshots_table
+    with conn.cursor() as cur:
+        counts = []
+        for table in (t, f"{t}_items", f"{t}_state"):
+            cur.execute(f'SELECT count(*) FROM public."{table}"')
+            counts.append(cur.fetchone()[0])
+    return tuple(counts)
+
+
+def _plan(result: dict) -> dict:
+    """То, что предпросмотр обещает применению: счётчики, ключи, конфликты."""
+    keys = ("opened", "closed", "unchanged", "superseded", "entities", "relations")
+    return {**{k: result[k] for k in keys}, "changes": result["changes"]}
+
+
+class TestReconcileState:
+    """Амендмент MEM-ADR-020 2026-09-28 (K004): предпросмотр, stateToken, expectedState,
+    конфликты естественного ключа."""
+
+    def test_dry_run_writes_nothing_and_plans_what_apply_does(
+        self, stores, settings, registry, cp, web
+    ):
+        conn, graph, facts, _, _ = stores
+        _run(settings, conn, web)  # отложенные связи web ждут эндпоинтов cp
+        rows, size = _ledger_rows(conn, settings), _graph_size(graph)
+
+        plan = _run(settings, conn, cp, dry_run=True)
+        assert plan["dryRun"] is True and plan["duplicate"] is False
+        assert plan["relations"]["resolved"] == 3  # план видит разрешение чужих связей
+        assert plan["entities"]["opened"] == len(cp["entities"])
+        # Ни граф, ни журнал (снимки, версии, отложенные связи, состояние) не изменились.
+        assert _ledger_rows(conn, settings) == rows
+        assert _graph_size(graph) == size
+        assert facts.facts(subject=UI_CALL, predicate="calls", namespaces=[NS]) == []
+        ledger = SnapshotLedger(conn, settings.snapshots_table)
+        assert (
+            ledger.snapshot_result(NS, "git:control-plane", "control-plane", cp["snapshotId"])
+            is None
+        )
+        # Токен пары без снимков — токен пустого состояния, по нему можно применить.
+        assert plan["stateToken"] == ledger.compute_state_token(NS, "x", "y")
+
+        applied = _run(settings, conn, cp, expected_state=plan["stateToken"])
+        assert applied["dryRun"] is False
+        assert _plan(applied) == _plan(plan)
+        assert applied["stateToken"] != plan["stateToken"]
+        (call,) = facts.facts(subject=UI_CALL, predicate="calls", namespaces=[NS])
+        assert call["object"] == CHECKPOINTS
+
+    def test_unchanged_snapshot_gives_empty_plan_and_same_token(
+        self, stores, settings, registry, cp
+    ):
+        conn = stores[0]
+        first = _run(settings, conn, cp)
+        same = _next(cp, "control-plane@same", "2026-09-24T08:00:00Z")
+
+        plan = _run(settings, conn, same, dry_run=True)
+        assert (plan["opened"], plan["closed"], plan["superseded"]) == (0, 0, 0)
+        assert {k: plan["changes"][k] for k in EMPTY} == EMPTY
+        assert plan["conflicts"]["items"] == []
+        assert plan["stateToken"] == first["stateToken"]
+
+        applied = _run(settings, conn, same, expected_state=plan["stateToken"])
+        assert applied["stateToken"] == first["stateToken"]  # без изменений токен прежний
+
+        # Повтор принятого снимка в предпросмотре — duplicate и пустые списки.
+        again = _run(settings, conn, same, dry_run=True)
+        assert again["duplicate"] is True and again["dryRun"] is True
+        assert {k: again["changes"][k] for k in EMPTY} == EMPTY
+
+    def test_stale_expected_state_is_rejected(self, stores, settings, registry, cp):
+        conn, graph, _, _, _ = stores
+        plan = _run(settings, conn, cp, dry_run=True)
+        applied = _run(settings, conn, cp)  # чужая загрузка успела раньше
+        changed = _next(cp, "control-plane@2", "2026-09-24T08:00:00Z")
+        next(e for e in changed["entities"] if e["key"] == CHECKPOINTS)["title"] = "другое"
+        rows, size = _ledger_rows(conn, settings), _graph_size(graph)
+
+        for dry_run in (False, True):
+            with pytest.raises(SnapshotStateMismatch) as exc:
+                _run(settings, conn, changed, expected_state=plan["stateToken"], dry_run=dry_run)
+            assert exc.value.expected_state == plan["stateToken"]
+            assert exc.value.state_token == applied["stateToken"]
+        assert _ledger_rows(conn, settings) == rows and _graph_size(graph) == size
+
+        # Повтор принятого снимка expectedState не проверяет: потерянный ответ не падает.
+        again = _run(settings, conn, cp, expected_state=plan["stateToken"])
+        assert again["duplicate"] is True and again["stateToken"] == applied["stateToken"]
+
+        # Новый план по текущему токену применяется.
+        fresh = _run(settings, conn, changed, dry_run=True)
+        done = _run(settings, conn, changed, expected_state=fresh["stateToken"])
+        assert done["changes"]["changed"] == [{"kind": "endpoint", "key": CHECKPOINTS}]
+
+    def test_token_ignores_other_pairs_and_pending_resolution(
+        self, stores, settings, registry, cp, web
+    ):
+        conn = stores[0]
+        ledger = SnapshotLedger(conn, settings.snapshots_table)
+        r_web = _run(settings, conn, web)
+        _run(settings, conn, cp)  # разрешила отложенные связи web
+        assert ledger.state_token(NS, "git:platform-web", "platform-web") == r_web["stateToken"]
+        # Состояние считается из открытых версий: сохранённое совпадает с вычисленным
+        # (пары, принятые до миграции K004, получают токен вычислением).
+        assert r_web["stateToken"] == ledger.compute_state_token(
+            NS, "git:platform-web", "platform-web"
+        )
+
+    def test_key_conflicts_with_other_source_are_visible(self, stores, settings, registry, cp):
+        conn = stores[0]
+        _run(settings, conn, cp)
+        mirror = _next(cp, "mirror@1", "2026-09-24T08:00:00Z")
+        mirror["source"], mirror["scope"] = "git:mirror", "mirror"
+        mirror["entities"] = [e for e in mirror["entities"] if e["kind"] == "endpoint"]
+        mirror["relations"] = []
+        endpoints = sorted(e["key"] for e in mirror["entities"])
+
+        plan = _run(settings, conn, mirror, dry_run=True)
+        assert plan["conflicts"] == {
+            "items": [
+                {
+                    "kind": "endpoint",
+                    "key": k,
+                    "source": "git:control-plane",
+                    "scope": "control-plane",
+                }
+                for k in endpoints
+            ],
+            "limit": settings.reconcile_changes_limit,
+            "truncated": False,
+        }
+        # Конфликт — сведения, а не отказ: применение проходит и видит то же.
+        applied = _run(settings, conn, mirror, expected_state=plan["stateToken"])
+        assert applied["conflicts"] == plan["conflicts"]
+        # Свой источник с собой не конфликтует.
+        own = _run(settings, conn, _next(cp, "control-plane@2", "2026-09-25T08:00:00Z"))
+        assert {c["source"] for c in own["conflicts"]["items"]} == {"git:mirror"}
+
+        limited = settings.model_copy(update={"reconcile_changes_limit": 1})
+        cut = _run(limited, conn, _next(mirror, "mirror@2", "2026-09-26T08:00:00Z"), dry_run=True)
+        assert len(cut["conflicts"]["items"]) == 1 and cut["conflicts"]["truncated"] is True
+
+
 class TestHttpEndToEnd:
     """Плоский документ снимка через HTTP (локальный режим без ключей)."""
 
@@ -647,6 +856,22 @@ class TestHttpEndToEnd:
         assert second.json()["relations"]["resolved"] == 3
         again = client.post("/api/memory/reconcile", json={**cp, "namespace": NS})
         assert again.json()["duplicate"] is True
+
+        # Предпросмотр и применение по состоянию (K004); устаревший план — 409.
+        nxt = {**_next(web, "platform-web@2", "2026-09-24T08:00:00Z"), "namespace": NS}
+        plan = client.post("/api/memory/reconcile", json={**nxt, "dryRun": True})
+        assert plan.status_code == 200 and plan.json()["dryRun"] is True
+        token = plan.json()["stateToken"]
+        stale = client.post("/api/memory/reconcile", json={**nxt, "expectedState": "st1-old"})
+        assert stale.status_code == 409
+        assert stale.json()["detail"] == {
+            "code": "snapshot_stale",
+            "message": stale.json()["detail"]["message"],
+            "expectedState": "st1-old",
+            "stateToken": token,
+        }
+        applied = client.post("/api/memory/reconcile", json={**nxt, "expectedState": token})
+        assert applied.status_code == 200 and applied.json()["stateToken"] == token
 
         clash = client.post(
             "/api/memory/reconcile", params={"namespace": NS}, json={**cp, "namespace": "other"}

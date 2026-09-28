@@ -192,8 +192,13 @@ class Settings(BaseSettings):
     domain_packs_table: str = Field(default="domain_packs")
     namespace_settings_table: str = Field(default="namespace_settings")
     snapshots_table: str = Field(default="source_snapshots")
+    # Индекс эмбеддингов сущностей видов с ``searchable`` (поиск по смыслу по сущностям,
+    # MEM-ADR-020 амендмент 2026-09-28): открытые версии, размерность — CB_EMBEDDING_DIM.
+    entity_embeddings_table: str = Field(default="entity_embeddings")
     # Максимум сущностей+фактов в одном снимке reconcile (защита от гигантских транзакций).
     reconcile_max_items: int = Field(default=20000)
+    # Максимум ключей в каждом списке ``changes`` ответа reconcile (opened/changed/closed).
+    reconcile_changes_limit: int = Field(default=1000)
 
     @model_validator(mode="after")
     def _fill_database_url(self) -> Settings:

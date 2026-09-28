@@ -18,6 +18,7 @@ import datetime as dt
 import json
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import psycopg
@@ -31,9 +32,11 @@ from platform_memory.core.observations import entity_ref_key
 from platform_memory.core.scopes import MAX_ALLOWED_SCOPES, is_visible, resolve_scopes
 from platform_memory.domain.reconcile import SnapshotLedger, valid_at
 from platform_memory.domain.registry import open_registry
+from platform_memory.domain.searchable import entity_index
 from platform_memory.graph.facts import EVIDENCE_RANK, FactStore, normalize_ts
 from platform_memory.graph.store import GraphStore
 from platform_memory.index import VectorIndex, build_embedder
+from platform_memory.index.entities import EntityIndex
 from platform_memory.index.embeddings import Embedder
 from platform_memory.context.budget import TokenEstimator, apply_budget
 from platform_memory.context.models import (
@@ -280,6 +283,75 @@ def _resolve_channel(
     return hits, report, [c.value for c in candidates]
 
 
+def _entity_vector_channel(
+    conn: psycopg.Connection,
+    settings: Settings,
+    graph: GraphStore,
+    ents: EntityIndex,
+    q_emb: list[float],
+    k: int,
+    nss: list[str],
+    scopes: list[str],
+    allowed: list[str] | None,
+    as_of: str,
+    add: Callable[..., Any],
+) -> None:
+    """Сущности индекса ``searchable`` в канал ``vector`` (MEM-ADR-020, амендмент 2026-09-28).
+
+    Кандидат — сама сущность (``node:<ключ>``, как у каналов resolve и graph — один
+    элемент на узел), ранги — свои в том же канале. Фильтры — как у resolve: scopes
+    запроса и видимость principal (в SQL), узел существует в графе; индекс держит
+    текущие версии, поэтому при ``as_of`` сущность, открытая позже, не берётся.
+    """
+    registry = open_registry(conn, settings)
+    kinds = {kind for ns in nss for kind in registry.catalog_for(ns).searchable_kinds()}
+    if not kinds:
+        return
+    hits = [
+        h
+        for h in ents.search(
+            q_emb, k, namespaces=nss, kinds=kinds, scopes=scopes, allowed_scopes=allowed
+        )
+        if not as_of or not h.row.valid_from or h.row.valid_from <= as_of
+    ]
+    by_kind: dict[tuple[str, str], list[str]] = {}
+    for h in hits:
+        by_kind.setdefault((h.row.namespace, h.row.kind), []).append(h.row.natural_key)
+    present = {
+        (ns, kind, key)
+        for (ns, kind), keys in sorted(by_kind.items())
+        for key in graph.existing_keys(kind, keys, ns)
+    }
+    rank = 0
+    for h in hits:
+        row = h.row
+        if (row.namespace, row.kind, row.natural_key) not in present:
+            continue
+        cand = add(
+            "entity",
+            f"node:{row.natural_key}",
+            "vector",
+            rank,
+            text=row.text,
+            title=neutralize_prompt_injection(row.title),
+            source_path=row.source_path,
+            provenance={
+                "node_key": row.natural_key,
+                "node_type": row.kind,
+                "namespace": row.namespace,
+                "snapshot": {
+                    "source": row.source,
+                    "scope": row.scope,
+                    "snapshot_id": row.snapshot_id,
+                },
+            },
+            scopes=row.scopes,
+        )
+        cand.signals.setdefault("similarity", h.score)
+        cand.signals["matched_on"] = "entity"
+        rank += 1
+
+
 def build_context(
     settings: Settings,
     request: ContextRequest | dict[str, Any],
@@ -440,15 +512,23 @@ def build_context(
                     cand.signals["occurred_at"] = rec.occurred_at
             latencies["lexical_ms"] = int((time.monotonic() - t0) * 1000)
 
-        # --- vector: семантика по чанкам ---
+        # --- vector: семантика по чанкам и по индексу сущностей (searchable) ---
         vector_hits = []
-        if "vector" in channels and req.query.strip() and index.table_exists():
+        ents = entity_index(conn, settings)
+        has_chunks = index.table_exists()
+        has_entities = "vector" in channels and ents.table_exists()
+        if "vector" in channels and req.query.strip() and (has_chunks or has_entities):
             t0 = time.monotonic()
             embedder = embedder or build_embedder(settings)
             q_emb = embedder.embed_one(req.query)
-            vector_hits = index.search(
-                q_emb, req.query, k=req.k, namespaces=nss, scopes=scopes, allowed_scopes=allowed
-            )
+            if has_chunks:
+                vector_hits = index.search(
+                    q_emb, req.query, k=req.k, namespaces=nss, scopes=scopes, allowed_scopes=allowed
+                )
+            if has_entities:
+                _entity_vector_channel(
+                    conn, settings, graph, ents, q_emb, req.k, nss, scopes, allowed, as_of, _add
+                )
             for rank, hit in enumerate(vector_hits):
                 cand = _add(
                     "document",
