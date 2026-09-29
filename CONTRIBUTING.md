@@ -10,8 +10,9 @@ organization; the platform is developed in the open under the Apache License 2.0
 
 ## Before you start
 
-- Read the [Product Vision](https://github.com/taimen-ai/taimen/blob/main/docs/product-vision.md)
-  and the platform [ADR registry](https://github.com/taimen-ai/taimen/blob/main/docs/adr/README.md).
+- Read the platform overview in the
+  [guide](https://github.com/taimen-ai/taimen/tree/main/guide/docs/overview)
+  (in Russian).
   This component keeps its own series of architecture decision records in
   [`docs/decisions/`](docs/decisions/) (`ADR-NNN-<slug>.md`, referenced from the
   platform registry as `MEM-ADR-NNN`). ADRs are written in Russian with an
@@ -23,8 +24,7 @@ organization; the platform is developed in the open under the Apache License 2.0
   `/api/brain/*`, self-contained build and tests, no secrets or customer data in
   the repository) are listed in [`CLAUDE.md`](CLAUDE.md) and apply to human
   contributors too.
-- Check the [roadmap](https://github.com/taimen-ai/taimen/blob/main/docs/roadmap.md)
-  and open issues before starting a large change. For anything that changes an
+- Check the open issues before starting a large change. For anything that changes an
   API, a data model or a service boundary, open an issue first and propose an ADR.
 
 ## Contributor License Agreement
@@ -96,8 +96,7 @@ directory as the context, because the SDK is a sibling:
   extend additively, and put breaking changes behind a new versioned path with
   an ADR. Public API changes (routes, schemas, MCP tools, `CB_*` variables)
   update `docs/INTEGRATION.md` and the README and, when they break
-  compatibility, the platform's
-  [migration notes](https://github.com/taimen-ai/taimen/blob/main/docs/).
+  compatibility, the component's release notes.
 - New dependencies keep `THIRD_PARTY.md` up to date; vendored code keeps the
   original copyright header.
 - The pull request template asks you to confirm the CLA and that no secrets,
