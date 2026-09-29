@@ -57,9 +57,9 @@ docker cp demo/build_graph.py <serve>:/tmp/ && \
   docker exec -e DEMO_NAMESPACE=demo <serve> python /tmp/build_graph.py
 ```
 
-## Поднятие на стенде
+## Публикация витрины
 
-На демо-контуре (`teststand/memory-demo/`) в `.env` добавить:
+В `.env` сервиса добавить:
 
 ```env
 CB_DEMO_PUBLIC_ENABLED=true
@@ -70,20 +70,12 @@ CB_DEMO_BRAND_TAGLINE=Answers your team can trace back to the source.
 CB_DEMO_CTA_URL=mailto:hello@<домен>
 ```
 
-`docker compose up -d --build`, затем прогнать `seed_stand.py` против стенда
-(`DEMO_BASE_URL`/`DEMO_TOKEN` из окружения). Traefik-роут для витрины — в
-`teststand/memory-demo/docker-compose.yml` (см. блок `# demo-showcase`).
-
-## Вход с taimen.ai — выбран поддомен `demo.taimen.ai`
-
-Владелец выбрал **вариант А**: поддомен `demo.taimen.ai` → стенд (DNS уже направлен на
-сервер). Traefik ловит `Host(demo.taimen.ai)` (роутер `memory-demo-show`, `DEMO_HOST`),
-корень `/` редиректит на `/demo`. Витрина включается одним флагом `CB_DEMO_PUBLIC_ENABLED=true`
-после наполнения демо-KB (см. `teststand/memory-demo/DEMO-SHOWCASE.md`).
-
-Альтернатива (не выбрана): `taimen.ai/demo` как статический лончер на Pages. Все URL
+`docker compose up -d --build`, затем прогнать `seed_stand.py` против инсталляции
+(`DEMO_BASE_URL`/`DEMO_TOKEN` из окружения). Наружу витрину выводит обратный прокси
+(Caddy, Traefik): отдельный хост с редиректом `/` на `/demo` или подпуть. Все URL
 внутри страницы относительны инъектируемого `base`, поэтому и поддомен, и подпуть
-работают без пересборки — при необходимости переключение бесплатно.
+работают без пересборки. Витрина включается одним флагом `CB_DEMO_PUBLIC_ENABLED=true`
+после наполнения демо-KB.
 
 ## Сборка офлайн-среза (canned) для Pages
 

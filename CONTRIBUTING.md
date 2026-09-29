@@ -10,8 +10,8 @@ organization; the platform is developed in the open under the Apache License 2.0
 
 ## Before you start
 
-- Read the [Product Vision](https://github.com/taimen-ai/taimen/blob/main/docs/product-vision.md)
-  and the platform [ADR registry](https://github.com/taimen-ai/taimen/blob/main/docs/adr/README.md).
+- Read the [Product Vision](https://github.com/monthu56/taimen/blob/main/docs/product-vision.md)
+  and the platform [ADR registry](https://github.com/monthu56/taimen/blob/main/docs/adr/README.md).
   This component keeps its own series of architecture decision records in
   [`docs/decisions/`](docs/decisions/) (`ADR-NNN-<slug>.md`, referenced from the
   platform registry as `MEM-ADR-NNN`). ADRs are written in Russian with an
@@ -23,7 +23,7 @@ organization; the platform is developed in the open under the Apache License 2.0
   `/api/brain/*`, self-contained build and tests, no secrets or customer data in
   the repository) are listed in [`CLAUDE.md`](CLAUDE.md) and apply to human
   contributors too.
-- Check the [roadmap](https://github.com/taimen-ai/taimen/blob/main/docs/roadmap.md)
+- Check the [roadmap](https://github.com/monthu56/taimen/blob/main/docs/roadmap.md)
   and open issues before starting a large change. For anything that changes an
   API, a data model or a service boundary, open an issue first and propose an ADR.
 
@@ -34,8 +34,8 @@ contribution, so that the project can be relicensed or defended without
 tracking down every author. The CLA is checked by cla-assistant on each pull
 request; you sign once.
 
-- Individuals: [`cla/CLA-individual.md`](https://github.com/taimen-ai/taimen/blob/main/cla/CLA-individual.md)
-- Companies contributing on behalf of employees: [`cla/CLA-entity.md`](https://github.com/taimen-ai/taimen/blob/main/cla/CLA-entity.md)
+- Individuals: [`cla/CLA-individual.md`](https://github.com/monthu56/taimen/blob/main/cla/CLA-individual.md)
+- Companies contributing on behalf of employees: [`cla/CLA-entity.md`](https://github.com/monthu56/taimen/blob/main/cla/CLA-entity.md)
 
 The CLA grants the project a copyright and patent licence to your
 contribution; you keep your copyright.
@@ -97,7 +97,7 @@ directory as the context, because the SDK is a sibling:
   an ADR. Public API changes (routes, schemas, MCP tools, `CB_*` variables)
   update `docs/INTEGRATION.md` and the README and, when they break
   compatibility, the platform's
-  [migration notes](https://github.com/taimen-ai/taimen/blob/main/docs/).
+  [migration notes](https://github.com/monthu56/taimen/blob/main/docs/).
 - New dependencies keep `THIRD_PARTY.md` up to date; vendored code keeps the
   original copyright header.
 - The pull request template asks you to confirm the CLA and that no secrets,
