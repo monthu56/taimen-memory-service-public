@@ -27,7 +27,7 @@ jobs:
       - name: Fetch oss-check from the umbrella
         uses: actions/checkout@v4
         with:
-          repository: ${{ vars.OSS_CHECK_REPO || 'monthu56/taimen' }}
+          repository: ${{ vars.OSS_CHECK_REPO || 'taimen-ai/taimen' }}
           # Read-only deploy key of the umbrella while it is private; empty after
           # the public release, then the default token is enough.
           ssh-key: ${{ secrets.TAIMEN_UMBRELLA_DEPLOY_KEY }}

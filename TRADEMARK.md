@@ -26,4 +26,4 @@ If you distribute a modified version, please choose your own name and remove
 the logo. Component names that are plain descriptions (`control-plane`,
 `iam-service`, `memory-service`, ...) are not claimed as trademarks.
 
-Questions and permission requests: open an issue in the Taimen umbrella repository (https://github.com/monthu56/taimen/issues).
+Questions and permission requests: open an issue in the Taimen umbrella repository (https://github.com/taimen-ai/taimen/issues).
