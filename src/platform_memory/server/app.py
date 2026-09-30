@@ -73,8 +73,16 @@ from platform_memory.server.visibility import (
     check_visible,
     narrow_visibility,
     resolve_visibility,
+    resolve_write_visibility,
 )
-from platform_memory.core.scopes import is_visible
+from platform_memory.core.scopes import (
+    MAX_ITEM_SCOPES,
+    ForeignObjectError,
+    audit_scopes,
+    is_visible,
+    node_scopes,
+    resolve_scopes,
+)
 from platform_memory.server.auth import (
     ApiKeysConfigError,
     CallerGrants,
@@ -278,6 +286,31 @@ async def visibility(request: Request, principal: Principal = Depends(authentica
     return narrow_visibility(visible, body)
 
 
+async def write_visibility(
+    request: Request, principal: Principal = Depends(authenticate)
+) -> VisibleSet:
+    """Видимость пишущего для записи по ключу существующего объекта (MEM-ADR-019).
+
+    Как :func:`visibility`, но service account с ``memory:on-behalf`` без
+    ``allowedNamespaces``/``allowedScopes`` пишет от себя, без ограничения
+    (``resolve_write_visibility``). Namespace записи решают гранты, а не видимость.
+    """
+    body: dict[str, Any] | None = None
+    try:
+        parsed = await request.json()
+    except Exception:  # noqa: BLE001 - тело не JSON: его отвергнет валидация модели
+        parsed = None
+    body = parsed if isinstance(parsed, dict) else None
+    subject = principal.subject if isinstance(principal, Principal) else None
+    visible = await resolve_write_visibility(get_settings(), subject, body)
+    return narrow_visibility(visible, body)
+
+
+def _foreign_write(exc: ForeignObjectError) -> HTTPException:
+    """Отказ записи по ключу чужого объекта: как отсутствие права, без полей объекта."""
+    return HTTPException(status_code=403, detail=str(exc))
+
+
 def _authorize(principal: Any, namespaces: Iterable[str], *, write: bool) -> None:
     """Авторизовать namespaces запроса против грантов вызывающего (403 при отказе).
 
@@ -463,9 +496,7 @@ def brain_nodes(
         )
     finally:
         conn.close()
-    allowed = _visible(visible).scopes
-    if allowed is not None:
-        nodes = [n for n in nodes if is_visible(_node_scopes(n), allowed)]
+    nodes = _visible_nodes(nodes, visible)
     return {"count": len(nodes), "nodes": nodes}
 
 
@@ -474,10 +505,12 @@ def _visible(visible: Any) -> VisibleSet:
     return visible if isinstance(visible, VisibleSet) else VisibleSet()
 
 
-def _node_scopes(node: dict[str, Any]) -> list[str]:
-    props = node.get("props") if isinstance(node.get("props"), dict) else {}
-    raw = props.get("scopes") if props else None
-    return [str(s) for s in raw] if isinstance(raw, list | tuple) else []
+def _visible_nodes(nodes: list[dict[str, Any]], visible: Any) -> list[dict[str, Any]]:
+    """Оставить узлы, видимые вызывающему по ``props.scopes`` (MEM-ADR-019)."""
+    allowed = _visible(visible).scopes
+    if allowed is None:
+        return nodes
+    return [n for n in nodes if is_visible(node_scopes(n), allowed)]
 
 
 # retain кладёт external_id=URL как natural_key, а reverse-proxy (traefik) схлопывает
@@ -566,6 +599,7 @@ def protect_pii_response(
     route: str,
     trace_id: str | None,
     namespace: str = "",
+    scopes: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Применить допуск к ПДн на исходящем ответе.
 
@@ -573,7 +607,8 @@ def protect_pii_response(
     непомеченные при записи ПДн не утекут) и помечаем ответ ``pii_masked``;
     full — если в выдаче есть ПДн, пишем событие журнала доступа ``pii_access``
     (учёт операций по 152-ФЗ) отдельным коротким соединением. Ошибка журнала
-    выдачу не роняет.
+    выдачу не роняет. ``scopes`` — scopes выданного объекта: событие несёт их в
+    ``payload.scopes``, и трейс скрывает его от того, кому объект не виден (MEM-ADR-019).
     """
     settings = get_settings()
     if not isinstance(principal, Principal):
@@ -613,7 +648,11 @@ def protect_pii_response(
                     trace_id or uuid.uuid4().hex,
                     principal.label,
                     "pii_access",
-                    payload={"route": route, "categories": found_total},
+                    payload={
+                        "route": route,
+                        "categories": found_total,
+                        **audit_scopes(scopes),
+                    },
                     namespace=namespace,  # журнал доступа — в аудит-контуре той же KB
                 )
             finally:
@@ -629,25 +668,34 @@ def brain_node(
     hops: int = Query(default=1, ge=1, le=2),
     namespace: str = Query(default="", description="База знаний (пусто — дефолтная)"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(visibility),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
 ) -> dict[str, Any]:
-    """Узел по natural_key и его соседи по графу. Ключ принимает слэши (URL-ключи retain)."""
+    """Узел по natural_key и его соседи по графу. Ключ принимает слэши (URL-ключи retain).
+
+    Узел со scope вне видимости вызывающего — 404, неотличимо от отсутствующего;
+    невидимые соседи отбрасываются, как в recall (MEM-ADR-019).
+    """
     natural_key = normalize_natural_key(natural_key)
     ns = _query_namespace(namespace)
     _authorize(principal, [ns], write=False)
+    check_visible(_visible(visible), [ns], get_settings().default_namespace)
     nss = [ns] if ns else []
     settings = get_settings()
     conn = dbmod.connect(settings)
     try:
         graph = GraphStore(conn, settings.graph_name, settings.default_namespace)
         node = graph.get_node(natural_key, namespaces=nss)
-        if node is None:
+        if node is None or not _visible_nodes([node], visible):
             raise HTTPException(status_code=404, detail=f"Узел не найден: {natural_key}")
         neighbors = graph.expand_neighbors([natural_key], hops=hops, namespaces=nss)
     finally:
         conn.close()
+    neighbors = _visible_nodes(neighbors, visible)
     payload = {"node": node, "neighbors": neighbors}
-    return protect_pii_response(payload, principal, "node", _hdr_str(x_run_id), ns)
+    return protect_pii_response(
+        payload, principal, "node", _hdr_str(x_run_id), ns, scopes=node_scopes(node)
+    )
 
 
 @app.get("/api/brain/sources/{natural_key:path}")
@@ -655,6 +703,7 @@ def brain_source(
     natural_key: str,
     namespace: str = Query(default="", description="База знаний (пусто — дефолтная)"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(visibility),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
 ) -> dict[str, Any]:
     """Оригинал статьи целиком: полный текст, provenance и traceable-метаданные.
@@ -664,17 +713,19 @@ def brain_source(
     оригинала (например, спроецирован из vault) — текст восстанавливается из
     чанков индекса по порядку (``content_source: "chunks"``). Узел ищется строго
     в запрошенном namespace; выдача проходит ту же PII-защиту, что и остальные
-    маршруты (маскирование/журнал доступа — ADR-002).
+    маршруты (маскирование/журнал доступа — ADR-002). Источник со scope вне
+    видимости вызывающего — 404, неотличимо от отсутствующего (MEM-ADR-019).
     """
     natural_key = normalize_natural_key(natural_key)
     ns = _query_namespace(namespace)
     _authorize(principal, [ns], write=False)
+    check_visible(_visible(visible), [ns], get_settings().default_namespace)
     settings = get_settings()
     conn = dbmod.connect(settings)
     try:
         graph = GraphStore(conn, settings.graph_name, settings.default_namespace)
         node = graph.get_node(natural_key, namespaces=[ns] if ns else [])
-        if node is None:
+        if node is None or not _visible_nodes([node], visible):
             raise HTTPException(status_code=404, detail=f"Источник не найден: {natural_key}")
         index = VectorIndex(
             conn, settings.chunks_table, settings.embedding_dim, settings.default_namespace
@@ -713,7 +764,9 @@ def brain_source(
         "pii": bool(props.get("pii", False)),
         "pii_categories": props.get("pii_categories") or [],
     }
-    return protect_pii_response(payload, principal, "source", _hdr_str(x_run_id), ns)
+    return protect_pii_response(
+        payload, principal, "source", _hdr_str(x_run_id), ns, scopes=node_scopes(node)
+    )
 
 
 @app.delete("/api/brain/nodes/{natural_key:path}")
@@ -724,6 +777,7 @@ def brain_node_delete(
     trace_id: str | None = Query(default=None),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(visibility),
 ) -> dict[str, Any]:
     """Удалить узел из графа (с рёбрами) и его чанки из индекса — с обязательным аудитом.
 
@@ -731,16 +785,21 @@ def brain_node_delete(
     удалённого узла; след восстанавливается по ``GET /api/brain/trace/{trace_id}``.
     Узлы аудит-контура (``audit_event``/``pc_trace``) защищены — 400.
     Ключ принимает слэши (``:path``): retain кладёт external_id=URL как natural_key.
+    Узел со scope вне видимости вызывающего не удаляется — 404, неотличимо от
+    отсутствующего (MEM-ADR-019).
     """
     natural_key = normalize_natural_key(natural_key)
     _authorize(principal, [namespace], write=True)
+    check_visible(_visible(visible), [namespace], get_settings().default_namespace)
     settings = get_settings()
     trace = trace_id or _hdr_str(x_run_id) or uuid.uuid4().hex
     conn = dbmod.connect(settings)
     try:
         graph = GraphStore(conn, settings.graph_name, settings.default_namespace)
         try:
-            snapshot = graph.delete_node(natural_key, namespace=namespace)
+            snapshot = graph.delete_node(
+                natural_key, namespace=namespace, allowed_scopes=_visible(visible).scopes
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if snapshot is None:
@@ -748,7 +807,9 @@ def brain_node_delete(
         index = VectorIndex(
             conn, settings.chunks_table, settings.embedding_dim, settings.default_namespace
         )
-        chunks_deleted = index.delete_for_node(natural_key, namespace=namespace)
+        chunks_deleted = index.delete_for_node(
+            natural_key, namespace=namespace, allowed_scopes=_visible(visible).scopes
+        )
         graph.record_audit(
             trace,
             actor,
@@ -759,6 +820,8 @@ def brain_node_delete(
                 "title": snapshot.get("title"),
                 "chunks_deleted": chunks_deleted,
                 "namespace": snapshot.get("namespace"),
+                # scope снимка — чтобы трейс не показал удалённый узел чужому (MEM-ADR-019)
+                **audit_scopes(snapshot),
             },
             run_id=_hdr_str(x_run_id),
             namespace=namespace,
@@ -811,25 +874,32 @@ def write_fact(
     req: FactReq,
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(write_visibility),
 ) -> dict[str, Any]:
     """Записать факт авторства агента в граф И индекс (origin='agent').
 
-    Переживает ре-ingest. В vault НЕ пишет.
+    Переживает ре-ingest. В vault НЕ пишет. Узел ключа вне видимости вызывающего не
+    перезаписывается — 403, как при отсутствии права; ``properties.scopes``
+    существующего узла сливаются, а не заменяются (MEM-ADR-019).
     """
     settings = get_settings()
     ns = _scope_namespace(req.scope)
     _authorize(principal, [ns], write=True)
-    return write_and_index_fact(
-        settings,
-        req.natural_key,
-        req.type,
-        req.title,
-        properties=req.properties,
-        links=req.links,
-        run_id=req.run_id or _hdr_str(x_run_id),  # сквозной X-Run-Id, если тело не задало run_id
-        confidence=req.confidence,
-        namespace=ns,
-    )
+    try:
+        return write_and_index_fact(
+            settings,
+            req.natural_key,
+            req.type,
+            req.title,
+            properties=req.properties,
+            links=req.links,
+            run_id=req.run_id or _hdr_str(x_run_id),  # сквозной X-Run-Id, если тело не задало
+            confidence=req.confidence,
+            namespace=ns,
+            allowed_scopes=_visible(visible).scopes,
+        )
+    except ForeignObjectError as exc:
+        raise _foreign_write(exc) from exc
 
 
 # ============================================================
@@ -993,6 +1063,7 @@ def brain_search(
             )
         finally:
             conn.close()
+        results = _visible_nodes(results, visible)
         payload = {
             "query": req.query,
             "mode": "structural",
@@ -1042,10 +1113,13 @@ def brain_retain(
     req: RetainRequest,
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(write_visibility),
 ) -> dict[str, Any]:
     """Идемпотентно записать факт/решение в граф И индекс (origin='agent').
 
-    Идемпотентность по external_id.
+    Идемпотентность по external_id. Узел ключа вне видимости вызывающего не
+    перезаписывается — 403, как при отсутствии права; scopes существующего узла
+    сохраняются (MEM-ADR-019).
     """
     settings = get_settings()
     ns = _scope_namespace(req.scope)
@@ -1076,20 +1150,24 @@ def brain_retain(
         if pii_categories:
             properties["pii"] = True
             properties["pii_categories"] = pii_categories
-    result = write_and_index_fact(
-        settings,
-        natural_key,
-        req.type,
-        title,
-        text=req.content,
-        properties=properties,
-        links=req.links,
-        run_id=prov.get("run_id"),
-        confidence=req.confidence,
-        source=prov.get("source"),
-        trace_id=trace_id,
-        namespace=ns,
-    )
+    try:
+        result = write_and_index_fact(
+            settings,
+            natural_key,
+            req.type,
+            title,
+            text=req.content,
+            properties=properties,
+            links=req.links,
+            run_id=prov.get("run_id"),
+            confidence=req.confidence,
+            source=prov.get("source"),
+            trace_id=trace_id,
+            namespace=ns,
+            allowed_scopes=_visible(visible).scopes,
+        )
+    except ForeignObjectError as exc:
+        raise _foreign_write(exc) from exc
     response = {"retained": True, "type": req.type, "title": title, **result}
     if pii_categories:
         response["pii_categories"] = pii_categories  # аддитивно: видно, что пометили
@@ -1103,17 +1181,33 @@ def brain_audit(
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
     principal: Principal = Depends(authenticate),
 ) -> dict[str, Any]:
-    """Записать событие аудита как узел/ребро трейса задачи (trace_id = issueId/runId)."""
+    """Записать событие аудита как узел/ребро трейса задачи (trace_id = issueId/runId).
+
+    ``payload.scopes`` — список scopes объекта события: по нему трейс скрывает событие
+    от вызывающего без видимости (MEM-ADR-019). Не список или некорректный scope — 400;
+    сохраняется канонизированный список.
+    """
     settings = get_settings()
     ns = _scope_namespace(req.scope)
     _authorize(principal, [ns], write=True)
+    payload = req.payload
+    if payload is not None and payload.get("scopes") is not None:
+        raw = payload["scopes"]
+        if not isinstance(raw, list):
+            raise HTTPException(
+                status_code=400, detail="payload.scopes должен быть списком 'type:id'"
+            )
+        try:
+            payload = {**payload, "scopes": resolve_scopes(raw, limit=MAX_ITEM_SCOPES)}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"payload.scopes: {exc}") from exc
     conn = dbmod.connect(settings)
     try:
         event = GraphStore(conn, settings.graph_name, settings.default_namespace).record_audit(
             req.trace_id,
             req.actor,
             req.action,
-            payload=req.payload,
+            payload=payload,
             ts=req.ts,
             run_id=req.run_id or _hdr_str(x_run_id),  # сквозной X-Run-Id, если тело не задало
             actor_id=req.actor_id,
@@ -1130,15 +1224,22 @@ def brain_trace(
     trace_id: str,
     namespace: str = Query(default="", description="База знаний (пусто — дефолтная)"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(visibility),
 ) -> dict[str, Any]:
-    """Подграф трейса задачи: события аудита (по времени) + привязанные факты."""
+    """Подграф трейса задачи: события аудита (по времени) + привязанные факты.
+
+    Факты и события со scope вне видимости вызывающего отбрасываются в запросе, до
+    лимита; scope события — его ``props.scopes`` и ``payload.scopes`` (scopes
+    удалённого или выданного объекта), MEM-ADR-019.
+    """
     ns = _query_namespace(namespace)
     _authorize(principal, [ns], write=False)
+    check_visible(_visible(visible), [ns], get_settings().default_namespace)
     settings = get_settings()
     conn = dbmod.connect(settings)
     try:
         return GraphStore(conn, settings.graph_name, settings.default_namespace).trace_subgraph(
-            trace_id, namespace=ns
+            trace_id, namespace=ns, allowed_scopes=_visible(visible).scopes
         )
     finally:
         conn.close()
@@ -1202,12 +1303,15 @@ def brain_document_ingest(
     req: DocumentIngestRequest,
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(write_visibility),
 ) -> dict[str, Any]:
     """Записать документ: узел графа + батч чанков с эмбеддингами в один namespace.
 
     Хост парсит документ сам и передаёт готовые текстовые чанки; эмбеддинги считает
     движок. Идемпотентно по natural_key (``replace=true`` заменяет чанки узла).
     ПДн маркируются на узле по авто-детекции в чанках плюс явной метке (ADR-002).
+    Узел или чанк ключа вне видимости вызывающего — 403 до любой записи, как при
+    отсутствии права; scopes существующего узла сливаются, чанки их несут (MEM-ADR-019).
     """
     settings = get_settings()
     ns = _document_namespace(req)
@@ -1243,7 +1347,10 @@ def brain_document_ingest(
             ],
             replace=req.replace,
             run_id=_hdr_str(x_run_id),
+            allowed_scopes=_visible(visible).scopes,
         )
+    except ForeignObjectError as exc:
+        raise _foreign_write(exc) from exc
     except (UnknownKindError, AttributesError, UnknownRelationError):
         raise  # строгий режим видов namespace -> 422 (MEM-ADR-020)
     except ValueError as exc:
@@ -1261,15 +1368,19 @@ def brain_document_delete(
     trace_id: str | None = Query(default=None),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
     principal: Principal = Depends(authenticate),
+    visible: VisibleSet = Depends(visibility),
 ) -> dict[str, Any]:
     """Удалить документ: узел с рёбрами и все его чанки в пределах namespace — с аудитом.
 
     Идемпотентно: повторный вызов по отсутствующему ключу отвечает ``deleted: false``
-    (в отличие от ``DELETE /api/brain/nodes/{key}``, который даёт 404).
+    (в отличие от ``DELETE /api/brain/nodes/{key}``, который даёт 404). Документ со
+    scope вне видимости вызывающего не удаляется и отвечает так же, как отсутствующий
+    (MEM-ADR-019).
     """
     natural_key = normalize_natural_key(natural_key)
     ns = _query_namespace(namespace)
     _authorize(principal, [ns], write=True)
+    check_visible(_visible(visible), [ns], get_settings().default_namespace)
     try:
         return delete_document(
             get_settings(),
@@ -1278,6 +1389,7 @@ def brain_document_delete(
             actor=_hdr_str(actor) or "api",  # прямой вызов хендлера: Query-дефолт -> "api"
             trace_id=_hdr_str(trace_id),
             run_id=_hdr_str(x_run_id),
+            allowed_scopes=_visible(visible).scopes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

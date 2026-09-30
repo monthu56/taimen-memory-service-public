@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 
 import networkx as nx
 
+from platform_memory.core.scopes import is_visible, node_scopes
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -24,18 +26,24 @@ def to_networkx(
     *,
     directed: bool = True,
     namespaces: Sequence[str] | None = None,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> nx.DiGraph | nx.Graph:
     """Спроецировать граф из AGE в NetworkX (весь или в пределах namespaces).
 
     Атрибуты узла подгоняются под ожидания vendored-кода graphify (``label``,
     ``source_file``), плюс ``type`` и сырые ``props``. Рёбра несут ``relation``
     (тип ребра) и ``source_path``. ``namespaces=None`` — весь граф (offline-анализ).
+    ``allowed_scopes`` — видимость читающего (MEM-ADR-019; None — без ограничения):
+    невидимых узлов в проекции нет, рёбер к ним — тоже (ни заглушкой, ни путём).
     """
     G: nx.DiGraph | nx.Graph = nx.DiGraph() if directed else nx.Graph()
+    restricted = allowed_scopes is not None
 
     for props in store.all_nodes(namespaces=namespaces):
         nk = props.get("natural_key")
         if not nk:
+            continue
+        if restricted and not is_visible(node_scopes(props), allowed_scopes):
             continue
         attrs = {
             "label": props.get("title") or str(nk),
@@ -56,6 +64,8 @@ def to_networkx(
         if not src or not dst:
             continue
         src, dst = str(src), str(dst)
+        if restricted and (src not in G or dst not in G):
+            continue  # конец невидим (или вне выборки) — заглушка выдала бы его ключ
         # Рёбра могут ссылаться на узлы, не попавшие в выборку узлов — добавим заглушки,
         # чтобы networkx не уронил обход.
         if src not in G:

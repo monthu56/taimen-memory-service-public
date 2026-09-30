@@ -15,6 +15,9 @@ Server-rendered (Jinja2): браузер получает готовый HTML и
 - POST-запросы проходят same-origin проверку (Origin vs Host) против CSRF.
 - Операции Console выполняются с полным допуском к ПДн под меткой ``console`` —
   каждая выдача ПДн журналируется событием ``pii_access`` (ADR-002).
+- Импорт пишет с видимостью уровня namespace (MEM-ADR-019): у Console нет
+  principal, поэтому узел или чанк со scope воркспейса или principal импорт не
+  перезаписывает — отказ, как у пишущего без воркспейсов.
 """
 
 from __future__ import annotations
@@ -82,6 +85,15 @@ def _check_origin(request: Request) -> None:
 def _console_principal():
     """Принципал операций Console: полный допуск, метка console в журнале ПДн."""
     return _engine().Principal(access="full", label="console")
+
+
+def _console_write_visibility():
+    """Видимость пишущего Console: только уровень namespace (MEM-ADR-019).
+
+    Console не знает, кто за ней стоит (доступ ограничивает reverse proxy), и не
+    может заявить ни воркспейс, ни principal: пишет как principal без воркспейсов.
+    """
+    return _engine().VisibleSet(scopes=())
 
 
 def _page(request: Request, name: str, ctx: dict[str, Any], status_code: int = 200):
@@ -392,7 +404,7 @@ def import_submit(
         scope={"namespace": ns},
     )
     try:
-        result = eng.brain_retain(req, x_run_id=trace_id)
+        result = eng.brain_retain(req, x_run_id=trace_id, visible=_console_write_visibility())
     except HTTPException as exc:
         return _page(
             request,

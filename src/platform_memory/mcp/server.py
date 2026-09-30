@@ -11,6 +11,13 @@
 Тот же набор tool'ов на обоих транспортах (stdio для локального агента, Streamable HTTP
 для общего стенда). HTTP закрывается api-key (CB_SERVER_API_KEY): заголовок
 ``Authorization: Bearer <key>`` или ``X-API-Key: <key>``.
+
+Видимость (MEM-ADR-019): MCP — служебная поверхность. Вызывающий — держатель
+статического ключа сервиса (или локальный процесс с доступом к БД по stdio), это
+service-режим, как у статического ключа HTTP API: без ограничения видимости.
+Агент, действующий за конечного principal, передаёт в аргументах любого tool'а
+``allowed_scopes`` — сужение (MEM-ADR-021): невидимые узлы, чанки и наблюдения не
+выдаются и не перезаписываются, scopes записи — только из этого списка.
 """
 
 from __future__ import annotations
@@ -22,6 +29,7 @@ import networkx as nx
 from platform_memory.core import db as dbmod
 from platform_memory.core.config import Settings, get_settings
 from platform_memory.core.llm_safety import neutralize_prompt_injection, sanitize_label
+from platform_memory.core.scopes import MAX_ALLOWED_SCOPES, is_visible, node_scopes, resolve_scopes
 from platform_memory.graph import GraphStore, to_networkx
 from platform_memory.retrieval import retrieve_subgraph
 
@@ -33,20 +41,42 @@ def _clean(value: object) -> str:
     return neutralize_prompt_injection(sanitize_label(str(value)))
 
 
-def _resolve_node(store: GraphStore, query: str) -> str | None:
-    """Разрешить запрос в natural_key: точное совпадение ключа, затем поиск по заголовку."""
+def _allowed(args: dict) -> list[str] | None:
+    """Сужение видимости вызова (``allowed_scopes``, MEM-ADR-021); нет поля — None.
+
+    Пустой список — только элементы уровня namespace, а не «без фильтра».
+    """
+    raw = args.get("allowed_scopes")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+        raise ValueError("allowed_scopes должен быть списком строк 'type:id'")
+    return resolve_scopes(raw, limit=MAX_ALLOWED_SCOPES)
+
+
+def _resolve_node(store: GraphStore, query: str, allowed: list[str] | None = None) -> str | None:
+    """Разрешить запрос в natural_key: точное совпадение ключа, затем поиск по заголовку.
+
+    Только в default namespace и только среди видимых ``allowed`` узлов: невидимый
+    узел неотличим от отсутствующего.
+    """
     q = query.strip()
-    if store.get_node(q) is not None:
+    if store.get_node(q) is not None and store.key_visible(q, allowed_scopes=allowed):
         return q
     ql = q.casefold()
     best: str | None = None
-    for props in store.all_nodes():
+    for props in store.all_nodes(namespaces=[store.default_namespace]):
+        if not is_visible(node_scopes(props), allowed):
+            continue
         nk = str(props.get("natural_key", ""))
         title = str(props.get("title", ""))
+        # Ключ может нести и невидимый узел другого вида — get_node вернул бы его.
         if nk.casefold() == ql or title.casefold() == ql:
-            return nk
-        if best is None and (ql in nk.casefold() or ql in title.casefold()):
-            best = nk
+            if store.key_visible(nk, allowed_scopes=allowed):
+                return nk
+        elif best is None and (ql in nk.casefold() or ql in title.casefold()):
+            if store.key_visible(nk, allowed_scopes=allowed):
+                best = nk
     return best
 
 
@@ -59,20 +89,30 @@ def tool_query_graph(settings: Settings, args: dict) -> str:
     mode = args.get("mode", "bfs")
     depth = min(int(args.get("depth", 2)), 6)
     budget = int(args.get("token_budget", 2000))
-    result = retrieve_subgraph(settings, question, mode=mode, depth=depth, token_budget=budget)
+    result = retrieve_subgraph(
+        settings,
+        question,
+        mode=mode,
+        depth=depth,
+        token_budget=budget,
+        allowed_scopes=_allowed(args),
+    )
     return result["text"] or "Подходящих узлов не найдено."
 
 
 def tool_get_node(settings: Settings, args: dict) -> str:
     """Детали узла по natural_key или заголовку: тип, источник, степень."""
+    allowed = _allowed(args)
     conn = dbmod.connect(settings, autocommit=True)
     try:
         store = GraphStore(conn, settings.graph_name, settings.default_namespace)
-        nk = _resolve_node(store, args["label"])
+        nk = _resolve_node(store, args["label"], allowed)
         if nk is None:
             return f"Узел не найден: {args['label']!r}"
         node = store.get_node(nk) or {}
-        neighbors = store.expand_neighbors([nk], hops=1)
+        neighbors = [
+            n for n in store.expand_neighbors([nk], hops=1) if is_visible(node_scopes(n), allowed)
+        ]
         inner = node.get("props") if isinstance(node.get("props"), dict) else {}
         lines = [
             f"Узел: {_clean(node.get('title', nk))}",
@@ -97,13 +137,14 @@ def tool_get_node(settings: Settings, args: dict) -> str:
 def tool_get_neighbors(settings: Settings, args: dict) -> str:
     """Прямые соседи узла (с типом связи). Опционально фильтр по типу связи."""
     rel_filter = str(args.get("relation_filter", "")).casefold()
+    allowed = _allowed(args)
     conn = dbmod.connect(settings, autocommit=True)
     try:
         store = GraphStore(conn, settings.graph_name, settings.default_namespace)
-        nk = _resolve_node(store, args["label"])
+        nk = _resolve_node(store, args["label"], allowed)
         if nk is None:
             return f"Узел не найден: {args['label']!r}"
-        G = to_networkx(store, namespaces=[settings.default_namespace])
+        G = to_networkx(store, namespaces=[settings.default_namespace], allowed_scopes=allowed)
         if nk not in G:
             return f"Узел не найден в графе: {nk}"
         lines = [f"Соседи «{_clean(G.nodes[nk].get('label', nk))}»:"]
@@ -125,6 +166,7 @@ def tool_get_neighbors(settings: Settings, args: dict) -> str:
 def tool_get_community(settings: Settings, args: dict) -> str:
     """Узлы сообщества по его id (community-summaries из Phase 3)."""
     cid = int(args["community_id"])
+    allowed = _allowed(args)
     conn = dbmod.connect(settings, autocommit=True)
     try:
         members = GraphStore(
@@ -132,6 +174,7 @@ def tool_get_community(settings: Settings, args: dict) -> str:
         ).community_members(cid)
     finally:
         conn.close()
+    members = [m for m in members if is_visible(node_scopes(m), allowed)]
     if not members:
         return f"Сообщество #{cid} пусто или не найдено."
     name = next((m.get("community_name") for m in members if m.get("community_name")), None)
@@ -146,19 +189,24 @@ def tool_get_community(settings: Settings, args: dict) -> str:
 
 
 def tool_shortest_path(settings: Settings, args: dict) -> str:
-    """Кратчайший путь между двумя сущностями (по неориентированной проекции)."""
+    """Кратчайший путь между двумя сущностями (по неориентированной проекции).
+
+    Путь идёт только через видимые узлы: невидимый промежуточный узел — как
+    отсутствующий (MEM-ADR-019).
+    """
+    allowed = _allowed(args)
     conn = dbmod.connect(settings, autocommit=True)
     try:
         store = GraphStore(conn, settings.graph_name, settings.default_namespace)
-        src = _resolve_node(store, args["source"])
-        tgt = _resolve_node(store, args["target"])
+        src = _resolve_node(store, args["source"], allowed)
+        tgt = _resolve_node(store, args["target"], allowed)
         if src is None:
             return f"Источник не найден: {args['source']!r}"
         if tgt is None:
             return f"Цель не найдена: {args['target']!r}"
         if src == tgt:
             return f"Источник и цель — один узел: {_clean(src)}"
-        G = to_networkx(store, namespaces=[settings.default_namespace])
+        G = to_networkx(store, namespaces=[settings.default_namespace], allowed_scopes=allowed)
         und = G.to_undirected(as_view=True)
         try:
             path = nx.shortest_path(und, src, tgt)
@@ -182,6 +230,7 @@ def tool_build_context(settings: Settings, args: dict) -> str:
             "anchors": list(args.get("anchors") or []),
             "max_tokens": int(args.get("max_tokens", 0)),
             "namespaces": [args["namespace"]] if args.get("namespace") else [],
+            "allowed_scopes": _allowed(args),
         },
     )
     text = pack.to_text().strip()
@@ -193,7 +242,11 @@ def tool_build_context(settings: Settings, args: dict) -> str:
 
 
 def tool_remember_observation(settings: Settings, args: dict) -> str:
-    """Сохранить наблюдение (идемпотентно по source identity, ADR-016)."""
+    """Сохранить наблюдение (идемпотентно по source identity, ADR-016).
+
+    Видимость пишущего — ``allowed_scopes`` (нет — service-режим статического ключа),
+    та же проверка, что у ``POST /api/memory/observations`` (MEM-ADR-019).
+    """
     from platform_memory.observations.ingest import retain_observation
 
     payload = {
@@ -206,7 +259,12 @@ def tool_remember_observation(settings: Settings, args: dict) -> str:
     }
     if args.get("source"):
         payload["source"] = dict(args["source"])
-    result = retain_observation(settings, payload, namespace=str(args.get("namespace", "") or ""))
+    result = retain_observation(
+        settings,
+        payload,
+        namespace=str(args.get("namespace", "") or ""),
+        allowed_scopes=_allowed(args),
+    )
     dup = " (дубликат — уже было)" if result["duplicate"] else ""
     return f"Сохранено: {result['observation_id']} status={result['status']}{dup}"
 
@@ -323,6 +381,20 @@ _TOOL_SPECS = [
 ]
 
 
+# Сужение видимости (MEM-ADR-021) — общий необязательный аргумент всех tool'ов.
+_ALLOWED_SCOPES_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string"},
+    "description": (
+        "Видимость вызова: scopes 'workspace:<id>'/'principal:<id>', за кого действует "
+        "агент. Узлы, чанки и наблюдения с чужим scope не выдаются и не перезаписываются; "
+        "пустой список — только общая память базы. Нет поля — без ограничения."
+    ),
+}
+for _name, _desc, _schema, _fn in _TOOL_SPECS:
+    _schema["properties"]["allowed_scopes"] = _ALLOWED_SCOPES_SCHEMA
+
+
 def build_server(settings: Settings | None = None):
     """Собрать low-level MCP Server со всеми tool'ами над AGE-графом Company Brain."""
     from mcp import types
@@ -403,6 +475,22 @@ class _ApiKeyMiddleware:
         await self.app(scope, receive, send)
 
 
+def _is_loopback(host: str) -> bool:
+    """Адрес bind — только loopback (127.0.0.0/8, ::1, localhost)."""
+    import ipaddress
+
+    if host.strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip().strip("[]")).is_loopback
+    except ValueError:
+        return False  # имя хоста, пустой bind — не loopback
+
+
+class InsecureBindError(RuntimeError):
+    """Streamable HTTP на не-loopback адресе без api-key (MEM-ADR-019)."""
+
+
 def build_http_app(
     settings: Settings | None = None,
     *,
@@ -414,7 +502,12 @@ def build_http_app(
     stateless: bool = False,
     session_timeout: float | None = 3600.0,
 ):
-    """Собрать Starlette-ASGI приложение Streamable HTTP транспорта (тестируется in-process)."""
+    """Собрать Starlette-ASGI приложение Streamable HTTP транспорта (тестируется in-process).
+
+    Без api-key допустим только loopback-адрес: MCP — служебная поверхность
+    держателя ``CB_SERVER_API_KEY`` (MEM-ADR-019), и без ключа на сетевом адресе он
+    отдавал бы граф без ограничения видимости любому. Иначе — ``InsecureBindError``.
+    """
     import contextlib
 
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -425,6 +518,11 @@ def build_http_app(
 
     settings = settings or get_settings()
     api_key = (api_key if api_key is not None else settings.server_api_key or "").strip() or None
+    if not api_key and not _is_loopback(host):
+        raise InsecureBindError(
+            f"MCP по HTTP на {host or '<все интерфейсы>'} без api-key не запускается: "
+            "задайте CB_SERVER_API_KEY (или --api-key) либо bind на 127.0.0.1"
+        )
     server = build_server(settings)
 
     if host in ("0.0.0.0", "::", ""):
@@ -489,20 +587,17 @@ def serve_http(
     import uvicorn
 
     settings = settings or get_settings()
-    app = build_http_app(settings, host=host, port=port, api_key=api_key, path=path)
+    try:
+        app = build_http_app(settings, host=host, port=port, api_key=api_key, path=path)
+    except InsecureBindError as exc:
+        print(f"ОШИБКА: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
     resolved_key = (api_key if api_key is not None else settings.server_api_key or "").strip()
-    auth_note = (
-        "api-key обязателен" if resolved_key else "без авторизации (задайте CB_SERVER_API_KEY)"
-    )
+    auth_note = "api-key обязателен" if resolved_key else "без авторизации, только loopback"
     print(
         f"Company Brain MCP (streamable-http) на http://{host}:{port}{path} — {auth_note}",
         file=sys.stderr,
     )
-    if host in ("0.0.0.0", "::", "") and not resolved_key:
-        print(
-            "ВНИМАНИЕ: bind на все интерфейсы без api-key открывает граф без авторизации.",
-            file=sys.stderr,
-        )
     uvicorn.run(app, host=host, port=port)
 
 

@@ -9,7 +9,8 @@ namespaces реальным WHERE-предикатом. Колонка ``meta js
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,7 +20,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from platform_memory.core.models import Chunk
-from platform_memory.core.scopes import chunk_visibility_sql
+from platform_memory.core.scopes import ForeignObjectError, chunk_visibility_sql, is_visible
 from platform_memory.core.namespaces import resolve_namespace, resolve_namespaces
 
 # Документ для полнотекстового поиска: имя сущности + секция + текст (русская конфигурация).
@@ -190,17 +191,80 @@ class VectorIndex:
 
     # --- запись ---
 
-    def delete_for_node(self, node_key: str, namespace: str = "") -> int:
-        """Удалить все чанки узла node_key в пределах одного namespace; вернуть их число."""
+    def delete_for_node(
+        self,
+        node_key: str,
+        namespace: str = "",
+        *,
+        allowed_scopes: Sequence[str] | None = None,
+    ) -> int:
+        """Удалить все чанки узла node_key в пределах одного namespace; вернуть их число.
+
+        ``allowed_scopes`` (не None) — видимость вызывающего (MEM-ADR-019): чанки вне
+        неё не удаляются и не считаются.
+        """
+        ns = resolve_namespace(namespace, self.default_namespace)
+        query = "DELETE FROM {tbl} WHERE node_key = %s AND namespace = %s"
+        params: list[Any] = [node_key, ns]
+        if allowed_scopes is not None:
+            query += " AND " + chunk_visibility_sql()
+            params.append(list(allowed_scopes))
+        with self.conn.cursor() as cur:
+            cur.execute(sql.SQL(query).format(tbl=self._tbl), params)
+            return cur.rowcount
+
+    @contextmanager
+    def key_write_lock(self, node_key: str, namespace: str = "") -> Iterator[None]:
+        """Сессионный advisory-лок ключа записи: проверка видимости и запись — под ним.
+
+        Запись по ключу через API (MEM-ADR-019) читает чанки и узлы ключа, проверяет
+        их видимость и только потом пишет узел и чанки. Без общего лока два пишущих
+        одного ключа проходили бы проверку одновременно (TOCTOU): чанки без узла и
+        узлы разных видов лок upsert'а узла не сериализует. Лок сессионный, а не
+        транзакционный: соединения движка — autocommit, а запись узла и чанков —
+        несколько транзакций; держать одну длинную транзакцию не нужно.
+        """
+        ns = resolve_namespace(namespace, self.default_namespace)
+        lock = f"{self.table}:key:{ns}:{node_key}"
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(hashtextextended(%s, 0))", (lock,))
+        try:
+            yield
+        finally:
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(hashtextextended(%s, 0))", (lock,))
+            except psycopg.Error:
+                pass  # соединение потеряно — сессионный лок снят вместе с ним
+
+    def guard_chunk_write(
+        self, node_key: str, namespace: str = "", allowed_scopes: Sequence[str] | None = None
+    ) -> list[str]:
+        """Проверить чанки ключа перед записью; вернуть объединение их scopes.
+
+        Чанк вне видимости ``allowed_scopes`` (None — без ограничения) —
+        :class:`ForeignObjectError`: запись перезаписала бы его по
+        ``(namespace, node_key, chunk_order)``. Объединение scopes существующих чанков
+        переносится на новые — перезапись их не стирает (MEM-ADR-019). Вызывать под
+        :meth:`key_write_lock` того же ключа, до записи узла и чанков.
+        """
         ns = resolve_namespace(namespace, self.default_namespace)
         with self.conn.cursor() as cur:
             cur.execute(
-                sql.SQL("DELETE FROM {tbl} WHERE node_key = %s AND namespace = %s").format(
-                    tbl=self._tbl
-                ),
+                sql.SQL(
+                    "SELECT DISTINCT meta->'scopes' FROM {tbl} "
+                    "WHERE node_key = %s AND namespace = %s AND meta ? 'scopes'"
+                ).format(tbl=self._tbl),
                 (node_key, ns),
             )
-            return cur.rowcount
+            rows = cur.fetchall()
+        merged: list[str] = []
+        for (raw,) in rows:
+            scopes = [str(s) for s in raw] if isinstance(raw, list) else []
+            if not is_visible(scopes, allowed_scopes):
+                raise ForeignObjectError(node_key)
+            merged.extend(scopes)
+        return list(dict.fromkeys(merged))
 
     def delete_by_meta(self, meta_filter: dict[str, Any], namespace: str = "") -> int:
         """Удалить чанки по containment-фильтру meta (например, по observation_id).

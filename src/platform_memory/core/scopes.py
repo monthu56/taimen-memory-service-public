@@ -116,3 +116,116 @@ def observation_visibility_sql(column: str = "scopes") -> str:
 def chunk_visibility_sql() -> str:
     """То же для чанков: scopes лежат в meta->'scopes' и могут отсутствовать вовсе."""
     return "(NOT meta ? 'scopes' OR " + observation_visibility_sql("(meta->'scopes')")[1:]
+
+
+def node_scopes(node: dict[str, Any]) -> list[str]:
+    """Scopes узла графа — ``props.scopes`` (нет или не список — пусто)."""
+    props = node.get("props") if isinstance(node.get("props"), dict) else {}
+    raw = props.get("scopes")
+    return [str(s) for s in raw] if isinstance(raw, list | tuple) else []
+
+
+def trace_node_scopes(node: dict[str, Any]) -> list[str]:
+    """Scopes узла трейса: ``props.scopes`` и у события аудита ещё ``props.payload.scopes``.
+
+    Устойчиво к типам: не-список (в том числе строка) и не-dict payload — пусто, как в
+    :func:`node_scopes`; события, записанные до валидации ``payload.scopes``, могут
+    нести что угодно (MEM-ADR-019).
+    """
+    scopes = node_scopes(node)
+    if node.get("type") == "audit_event":
+        props = node.get("props") if isinstance(node.get("props"), dict) else {}
+        payload = props.get("payload")
+        if isinstance(payload, dict):
+            scopes += node_scopes({"props": payload})
+    return scopes
+
+
+def audit_scopes(snapshot: dict[str, Any] | Iterable[str]) -> dict[str, list[str]]:
+    """``{"scopes": …}`` удалённого/выданного объекта для payload аудита (пусто — без scopes).
+
+    Принимает снимок узла или готовый список scopes (наблюдение). Событие несёт
+    сведения об объекте; по этим scopes трейс скрывает его от вызывающего, которому
+    объект не виден (MEM-ADR-019).
+    """
+    scopes = node_scopes(snapshot) if isinstance(snapshot, dict) else [str(s) for s in snapshot]
+    return {"scopes": scopes} if scopes else {}
+
+
+# --- видимость на записи (MEM-ADR-019, TASK-001052) ----------------------------
+
+
+class ForeignObjectError(PermissionError):
+    """Запись по ключу существующего объекта вне видимости пишущего.
+
+    Сообщение нейтрально — ни scopes, ни содержимого объекта: HTTP отвечает на это
+    так же, как на отсутствие права записи (``403``), существование не раскрывается.
+    """
+
+    def __init__(self, natural_key: str):
+        super().__init__(f"Нет прав на запись: {natural_key}")
+        self.natural_key = natural_key
+
+
+def check_write_scopes(scopes: Iterable[Any] | None, allowed: Iterable[str] | None) -> None:
+    """Scopes видимости записи — только из видимости пишущего (None — без ограничения).
+
+    Иначе пишущий создал бы объект со scope, которого сам не имеет: подсунул бы его
+    чужому воркспейсу, а redrive наблюдения перезаписал бы от его имени объекты
+    этого воркспейса. Отказ — :class:`ForeignObjectError` с чужим scope: его
+    передал сам пишущий, объектов он не раскрывает.
+    """
+    if allowed is None:
+        return
+    permitted = {str(a) for a in allowed}
+    for scope in scopes or ():
+        if str(scope).startswith(VISIBILITY_PREFIXES) and str(scope) not in permitted:
+            raise ForeignObjectError(str(scope))
+
+
+def meta_scopes(meta: dict[str, Any] | None) -> list[str]:
+    """Scopes из ``meta`` чанка: список или одна строка (нет — пусто)."""
+    raw = (meta or {}).get("scopes")
+    if isinstance(raw, str):
+        return [raw]
+    return [str(s) for s in raw] if isinstance(raw, list | tuple) else []
+
+
+def merge_scopes(existing: Iterable[str] | None, incoming: Iterable[str]) -> list[str]:
+    """Scopes объекта после перезаписи: объединение, видимость не сужается и не стирается.
+
+    ``existing`` None — объекта не было: scopes записи как есть. Иначе:
+
+    * scopes видимости (``workspace:``/``principal:``) объединяются — перезапись не
+      стирает чужие; но объект уровня namespace (без scope видимости) им и остаётся:
+      scope видимости записи его не приватизирует, иначе писатель скрыл бы общий
+      объект от остальных;
+    * scopes релевантности (``task:``/``run:``/…) — последний писатель, если он их
+      передал, иначе прежние (не накапливаются от записи к записи).
+    """
+    new = [str(s) for s in incoming]
+    if existing is None:
+        return list(dict.fromkeys(new))
+    old = [str(s) for s in existing]
+    old_vis = [s for s in old if s.startswith(VISIBILITY_PREFIXES)]
+    new_vis = [s for s in new if s.startswith(VISIBILITY_PREFIXES)]
+    visibility = old_vis + new_vis if old_vis else []
+    new_rel = [s for s in new if not s.startswith(VISIBILITY_PREFIXES)]
+    relevance = new_rel or [s for s in old if not s.startswith(VISIBILITY_PREFIXES)]
+    return list(dict.fromkeys(visibility + relevance))
+
+
+def meta_with_scopes(meta: dict[str, Any] | None, *scope_lists: Iterable[str]) -> dict[str, Any]:
+    """``meta`` чанка с ``scopes`` — объединением своих и переданных (пусто — как было).
+
+    Чанк объекта со scopes несёт их в ``meta.scopes``: по ним фильтрует индекс, и
+    перезапись чанка не должна их стереть (MEM-ADR-019).
+    """
+    out = dict(meta or {})
+    own = out.get("scopes")
+    merged = [str(s) for s in own] if isinstance(own, list | tuple) else []
+    for scopes in scope_lists:
+        merged.extend(str(s) for s in scopes)
+    if merged:
+        out["scopes"] = list(dict.fromkeys(merged))
+    return out

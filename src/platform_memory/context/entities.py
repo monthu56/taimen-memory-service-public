@@ -6,17 +6,19 @@
      "value": "2026-12-31"}], "as_of": "2026-09-01T00:00:00Z", "limit": 100,
      "cursor": null, "namespaces": ["tenant:t1"]}
 
-1. Источник — журнал сверки снимков: по одной версии на ``(kind, key, namespace)``,
-   валидной на ``as_of`` (пусто — открытые сейчас); если сущность держат несколько
-   источников — самая поздняя. Сущности без журнала (граф наблюдений) в перечень не
-   входят.
+1. Источник — журнал сверки снимков: по одной записи на ``(kind, key, namespace)`` из
+   версий, валидных на ``as_of`` (пусто — открытые сейчас); если сущность держат
+   несколько источников — сведение их версий (MEM-ADR-022: атрибут одного источника не
+   пропадает от снимка другого, конфликт — по ``sourcePriority`` вида, затем по
+   ``observedAt``); ``sources`` — сведённые версии по старшинству. Сущности без журнала
+   (граф наблюдений) в перечень не входят.
 2. Видимость scopes (MEM-ADR-019) — в SQL, до лимита; ``allowed_scopes`` задаёт
    HTTP-слой, не клиент. Неизвестный вид — просто пустой ответ.
-3. ``where`` (``context/where.py``) проверяет атрибуты версии.
+3. ``where`` (``context/where.py``) проверяет сведённые атрибуты.
 4. Порядок — ``(kind, key, namespace)``, стабильный; ``nextCursor`` — непрозрачная
    позиция после последней просмотренной строки. Курсор keyset: страницы не
    повторяются и не пропускают сущности, существовавшие на протяжении обхода.
-   За запрос просматривается не больше ``MAX_SCAN`` версий: если фильтр редкий,
+   За запрос просматривается не больше ``MAX_SCAN`` сущностей: если фильтр редкий,
    страница может быть короче ``limit`` при непустом ``nextCursor`` — конец перечня
    только ``nextCursor: null``.
 
@@ -40,13 +42,15 @@ from platform_memory.core.config import Settings
 from platform_memory.core.llm_safety import neutralize_prompt_injection
 from platform_memory.core.namespaces import resolve_namespaces
 from platform_memory.core.scopes import MAX_ALLOWED_SCOPES, resolve_scopes
+from platform_memory.domain.merge import SourceRank, rank_by_catalogs, source_path_of
 from platform_memory.domain.reconcile import SnapshotLedger
+from platform_memory.domain.registry import open_registry
 from platform_memory.graph.facts import normalize_ts
 
 MAX_KINDS = 20
 MAX_LIMIT = 500
 DEFAULT_LIMIT = 100
-# Версий, просматриваемых за запрос (ограничение работы при редком where).
+# Сущностей, просматриваемых за запрос (ограничение работы при редком where).
 MAX_SCAN = 5000
 # Имя вида — как в пакетах (KindSpecIn.kind); регистр не приводится.
 KIND_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,62}$")
@@ -129,15 +133,18 @@ def _item(row: dict[str, Any]) -> dict[str, Any]:
         "namespace": row["namespace"],
         "title": neutralize_prompt_injection(str(payload.get("title") or row["key"])),
         "attributes": dict(attributes) if isinstance(attributes, dict) else {},
+        # Старшая из сведённых версий (MEM-ADR-022) и её цитата.
         "source": row["source"],
         "scope": row["scope"],
         "snapshot_id": row["snapshot_id"],
-        # Цитата — источник версии, действующей на as_of (как в context/typed).
-        "source_path": str(
-            payload.get("source_path") or f"snapshot:{row['source']}/{row['snapshot_id']}"
-        ),
+        "source_path": source_path_of(row),
         "valid_from": row["valid_from"],
         "valid_to": row["valid_to"],
+        # Все источники, из которых сведена запись на as_of, по старшинству.
+        "sources": [
+            {k: s[k] for k in ("source", "scope", "snapshot_id", "source_path")}
+            for s in row.get("sources") or []
+        ],
     }
 
 
@@ -146,9 +153,12 @@ def _position(row: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def page_entities(
-    ledger: SnapshotLedger, req: EntityQueryRequest, allowed: list[str] | None
+    ledger: SnapshotLedger,
+    req: EntityQueryRequest,
+    allowed: list[str] | None,
+    rank: SourceRank | None = None,
 ) -> tuple[list[dict[str, Any]], str | None, int]:
-    """Страница перечня: (строки, nextCursor, просмотрено версий)."""
+    """Страница перечня: (строки, nextCursor, просмотрено сущностей)."""
     items: list[dict[str, Any]] = []
     after = req.after
     scanned = 0
@@ -162,6 +172,7 @@ def page_entities(
             allowed_scopes=allowed,
             after=after,
             limit=want,
+            rank=rank,
         )
         for row in rows:
             scanned += 1
@@ -199,7 +210,9 @@ def query_entities(
     try:
         ledger = SnapshotLedger(conn, settings.snapshots_table)
         if ledger.table_exists():
-            rows, next_cursor, scanned = page_entities(ledger, req, allowed)
+            registry = open_registry(conn, settings)
+            rank = rank_by_catalogs({ns: registry.catalog_for(ns) for ns in req.namespaces})
+            rows, next_cursor, scanned = page_entities(ledger, req, allowed, rank)
         else:
             rows, next_cursor, scanned = [], None, 0
     finally:

@@ -110,7 +110,7 @@ class _Ledger:
             "payload": {"title": title, "attributes": attributes or {}, "scopes": scopes or []},
         }
 
-    def open_entity_versions(self, ns, kinds, keys=None):
+    def open_entity_versions(self, ns, kinds, keys=None, *, rank=None):
         return [
             v
             for (kind, key), v in sorted(self.open.items())

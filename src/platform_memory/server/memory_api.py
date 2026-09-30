@@ -12,6 +12,7 @@ monkeypatch'ем без БД.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import Request, APIRouter, Depends, Header, HTTPException, Query, Response
@@ -25,10 +26,12 @@ from platform_memory.context.typed import compile_typed_context
 from platform_memory.core import db as dbmod
 from platform_memory.core import timing
 from platform_memory.core.kinds import TENANT_REF_PREFIX, PackError
+from platform_memory.core.scopes import ForeignObjectError, is_visible
 from platform_memory.domain.reconcile import (
     SnapshotError,
     SnapshotStateMismatch,
     StaleSnapshotError,
+    merge_namespace_nodes,
 )
 from platform_memory.domain.reconcile import reconcile as reconcile_snapshot
 from platform_memory.domain.registry import (
@@ -37,12 +40,13 @@ from platform_memory.domain.registry import (
     PackScopeConflictError,
     open_registry,
     pack_payload,
+    priority_fingerprint,
 )
-from platform_memory.domain.searchable import reindex_namespace
+from platform_memory.domain.searchable import lock_reconciles, reindex_namespace
 from platform_memory.index import build_embedder
 from platform_memory.observations.consolidate import consolidate, delete_observation
 from platform_memory.observations.ingest import retain_observation, retain_observations
-from platform_memory.observations.store import ObservationStore
+from platform_memory.observations.store import ObservationStore, SchemaMigrationBusy
 from platform_memory.server.domain_schemas import (
     EntitiesQueryIn,
     EntitiesQueryResult,
@@ -77,13 +81,26 @@ async def _visibility(request: Request, principal=Depends(_authenticate)):
         return await _app_mod().visibility(request, principal)
 
 
+async def _write_visibility(request: Request, principal=Depends(_authenticate)):
+    """Видимость пишущего (MEM-ADR-019) — единая точка app.write_visibility."""
+    with timing.phase("visibility"):
+        return await _app_mod().write_visibility(request, principal)
+
+
 def _settings():
     return _app_mod().get_settings()
 
 
-def _protect(payload: dict[str, Any], principal, route: str, trace_id: str | None, ns: str):
+def _protect(
+    payload: dict[str, Any],
+    principal,
+    route: str,
+    trace_id: str | None,
+    ns: str,
+    scopes: Sequence[str] = (),
+):
     """PII-барьер выдачи — единая точка app.protect_pii_response."""
-    return _app_mod().protect_pii_response(payload, principal, route, trace_id, ns)
+    return _app_mod().protect_pii_response(payload, principal, route, trace_id, ns, scopes=scopes)
 
 
 def _write_ns(scope: dict | None) -> str:
@@ -123,18 +140,40 @@ class ContextIn(BaseModel):
     scope: dict | None = None
 
 
+def _migration_busy(exc: SchemaMigrationBusy) -> HTTPException:
+    """Миграция таблицы наблюдений или журнала снимков не дождалась лока — временно,
+    повторить позже."""
+    return HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "5"})
+
+
 @router.post("/observations", status_code=201)
 def memory_observe(
     req: ObservationIn,
     principal=Depends(_authenticate),
+    visible=Depends(_write_visibility),
 ) -> dict[str, Any]:
-    """Принять одно наблюдение (идемпотентно по source identity)."""
+    """Принять одно наблюдение (идемпотентно по source identity).
+
+    Scope видимости наблюдения вне видимости вызывающего — ``403`` до записи;
+    повтор source identity наблюдения, невидимого вызывающему, — ``403`` без id и
+    статуса чужой записи. Assertion не перезаписывает узел, чанк или факт вне
+    видимости вызывающего — ошибка assertion'а в статусе наблюдения (MEM-ADR-019).
+    """
     settings = _settings()
     ns = _write_ns(req.scope)
     _authorize(principal, [ns], write=True)
     payload = req.model_dump(exclude={"scope"})
+    # allowedNamespaces/allowedScopes — видимость пишущего, не поля наблюдения.
+    for key in ("allowedNamespaces", "allowed_namespaces", "allowedScopes", "allowed_scopes"):
+        payload.pop(key, None)
     try:
-        result = retain_observation(settings, payload, namespace=ns)
+        result = retain_observation(
+            settings, payload, namespace=ns, allowed_scopes=_app_mod()._visible(visible).scopes
+        )
+    except ForeignObjectError as exc:
+        raise _app_mod()._foreign_write(exc) from exc
+    except SchemaMigrationBusy as exc:
+        raise _migration_busy(exc) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -146,8 +185,13 @@ def memory_observe(
 def memory_observe_batch(
     req: ObservationBatchIn,
     principal=Depends(_authenticate),
+    visible=Depends(_write_visibility),
 ) -> dict[str, Any]:
-    """Batch-приём наблюдений: по-элементные результаты, partial errors (§34)."""
+    """Batch-приём наблюдений: по-элементные результаты, partial errors (§34).
+
+    Видимость пишущего — как у одиночного приёма (MEM-ADR-019); наблюдение с чужим
+    scope — ошибка элемента.
+    """
     settings = _settings()
     ns = _write_ns(req.scope)
     _authorize(principal, [ns], write=True)
@@ -157,7 +201,12 @@ def memory_observe_batch(
             detail=f"Батч больше лимита {settings.observations_max_batch}",
         )
     try:
-        return retain_observations(settings, req.observations, namespace=ns)
+        return retain_observations(
+            settings,
+            req.observations,
+            namespace=ns,
+            allowed_scopes=_app_mod()._visible(visible).scopes,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
@@ -169,13 +218,20 @@ def memory_observation_get(
     observation_id: str,
     namespace: str = Query(default=""),
     principal=Depends(_authenticate),
+    visible=Depends(_visibility),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
 ) -> dict[str, Any]:
-    """Прочитать наблюдение по id (PII-барьер применяется к content)."""
+    """Прочитать наблюдение по id (PII-барьер применяется к content).
+
+    Наблюдение со scope вне видимости вызывающего — 404, неотличимо от
+    отсутствующего (MEM-ADR-019).
+    """
     app_mod = _app_mod()
     settings = app_mod.get_settings()
     ns = app_mod._query_namespace(namespace)
     _authorize(principal, [ns], write=False)
+    vis = app_mod._visible(visible)
+    app_mod.check_visible(vis, [ns], settings.default_namespace)
     conn = dbmod.connect(settings)
     try:
         store = ObservationStore(conn, settings.observations_table, settings.default_namespace)
@@ -186,9 +242,11 @@ def memory_observation_get(
         )
     finally:
         conn.close()
-    if record is None:
+    if record is None or not is_visible(record.scopes, vis.scopes):
         raise HTTPException(status_code=404, detail=f"Наблюдение не найдено: {observation_id}")
-    return _protect(record.to_payload(), principal, "observation", x_run_id, ns)
+    return _protect(
+        record.to_payload(), principal, "observation", x_run_id, ns, scopes=record.scopes
+    )
 
 
 @router.delete("/observations/{observation_id}")
@@ -199,13 +257,20 @@ def memory_observation_delete(
     actor: str = Query(default="api"),
     trace_id: str | None = Query(default=None),
     principal=Depends(_authenticate),
+    visible=Depends(_visibility),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
 ) -> dict[str, Any]:
-    """Удалить/зачистить наблюдение с каскадом на derived-память и аудитом (§40)."""
+    """Удалить/зачистить наблюдение с каскадом на derived-память и аудитом (§40).
+
+    Наблюдение со scope вне видимости вызывающего не трогается — 404, неотличимо
+    от отсутствующего (MEM-ADR-019).
+    """
     app_mod = _app_mod()
     settings = app_mod.get_settings()
     ns = app_mod._query_namespace(namespace)
     _authorize(principal, [ns], write=True)
+    vis = app_mod._visible(visible)
+    app_mod.check_visible(vis, [ns], settings.default_namespace)
     result = delete_observation(
         settings,
         observation_id,
@@ -213,6 +278,7 @@ def memory_observation_delete(
         mode=mode,
         actor=actor,
         trace_id=trace_id or x_run_id or "",
+        allowed_scopes=vis.scopes,
     )
     if result is None:
         raise HTTPException(status_code=404, detail=f"Наблюдение не найдено: {observation_id}")
@@ -252,21 +318,44 @@ def memory_context_trace(
     trace_id: str,
     namespace: str = Query(default=""),
     principal=Depends(_authenticate),
+    visible=Depends(_visibility),
 ) -> dict[str, Any]:
-    """Трейс компиляции: каналы, счётчики, ranking- и budget-решения (§32)."""
+    """Трейс компиляции: каналы, счётчики, ranking- и budget-решения (§32).
+
+    Трейс несёт запрос и id выбранных элементов, видимых его автору, поэтому
+    виден тому, чья видимость не уже видимости автора (``request.allowed_scopes``);
+    иначе — 404, неотличимо от отсутствующего (MEM-ADR-019).
+    """
     app_mod = _app_mod()
     settings = app_mod.get_settings()
     ns = app_mod._query_namespace(namespace)
     _authorize(principal, [ns], write=False)
+    vis = app_mod._visible(visible)
+    app_mod.check_visible(vis, [ns], settings.default_namespace)
     conn = dbmod.connect(settings)
     try:
         store = ContextTraceStore(conn, settings.context_traces_table, settings.default_namespace)
         trace = store.get(trace_id, namespaces=[ns] if ns else []) if store.table_exists() else None
     finally:
         conn.close()
-    if trace is None:
+    if trace is None or not _trace_visible(trace, vis.scopes):
         raise HTTPException(status_code=404, detail=f"Трейс не найден: {trace_id}")
     return trace
+
+
+def _trace_visible(trace: dict[str, Any], allowed) -> bool:
+    """Видимость автора трейса покрыта видимостью читателя (None — без ограничения).
+
+    Трейс без записанной видимости (автор без ограничения или трейс до MEM-ADR-019)
+    читает только вызывающий без ограничения.
+    """
+    if allowed is None:
+        return True
+    request = trace.get("request") if isinstance(trace.get("request"), dict) else {}
+    author = request.get("allowed_scopes")
+    if not isinstance(author, list):
+        return False
+    return {str(s) for s in author} <= {str(s) for s in allowed}
 
 
 @router.post("/consolidate")
@@ -274,13 +363,24 @@ def memory_consolidate(
     scope: dict | None = None,
     limit: int = Query(default=500, ge=1, le=5000),
     principal=Depends(_authenticate),
+    visible=Depends(_write_visibility),
 ) -> dict[str, Any]:
-    """On-demand consolidation: redrive необработанных наблюдений (§26)."""
+    """On-demand consolidation: redrive необработанных наблюдений (§26).
+
+    Namespace вне видимости вызывающего — ``403``, как у чтения: отчёт раскрывает
+    счётчики статусов. Вызывающий с ограниченной видимостью переигрывает и считает
+    только видимые ему наблюдения (MEM-ADR-019).
+    """
+    app_mod = _app_mod()
     settings = _settings()
     ns = _write_ns(scope)
     _authorize(principal, [ns], write=True)
+    vis = app_mod._visible(visible)
+    app_mod.check_visible(vis, [ns], settings.default_namespace)
     try:
-        return consolidate(settings, namespace=ns, limit=limit)
+        return consolidate(settings, namespace=ns, limit=limit, allowed_scopes=vis.scopes)
+    except SchemaMigrationBusy as exc:
+        raise _migration_busy(exc) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -292,13 +392,20 @@ def memory_observations_list(
     status: str = Query(default=""),
     limit: int = Query(default=50, ge=1, le=500),
     principal=Depends(_authenticate),
+    visible=Depends(_visibility),
     x_run_id: str | None = Header(default=None, alias="X-Run-Id"),
 ) -> dict[str, Any]:
-    """Свежие наблюдения (аудит ingestion state; PII-барьер применяется)."""
+    """Свежие наблюдения (аудит ingestion state; PII-барьер применяется).
+
+    Наблюдения со scope вне видимости вызывающего не попадают ни в список, ни в
+    свод статусов (MEM-ADR-019).
+    """
     app_mod = _app_mod()
     settings = app_mod.get_settings()
     ns = app_mod._query_namespace(namespace)
     _authorize(principal, [ns], write=False)
+    vis = app_mod._visible(visible)
+    app_mod.check_visible(vis, [ns], settings.default_namespace)
     conn = dbmod.connect(settings)
     try:
         store = ObservationStore(conn, settings.observations_table, settings.default_namespace)
@@ -309,8 +416,9 @@ def memory_observations_list(
             kinds=[kind] if kind else (),
             status=status,
             limit=limit,
+            allowed_scopes=vis.scopes,
         )
-        statuses = store.counts_by_status([ns] if ns else [])
+        statuses = store.counts_by_status([ns] if ns else [], allowed_scopes=vis.scopes)
     finally:
         conn.close()
     payload = {
@@ -495,6 +603,10 @@ def memory_namespace_kinds_put(
     Затем — переиндексация сущностей для поиска по смыслу по новому каталогу (виды с
     ``searchable``): ``reindex`` — счётчики или ``error``. Ошибка переиндексации
     настройку не откатывает: индекс остаётся прежним, повтор ``PUT`` доделает.
+    ``merge`` — пересведение узлов сущностей из версий источников по новому
+    ``sourcePriority`` (MEM-ADR-022): ``{nodes}`` или ``error``, повтор ``PUT`` доделает;
+    ``sourcePriority`` видов совпадает с тем, по которому узлы сведены в последний раз, —
+    ``{nodes: 0, skipped: true}`` (узлы не трогаются).
     """
     _authorize_core(principal)
     settings = _settings()
@@ -515,10 +627,27 @@ def memory_namespace_kinds_put(
             )
         except Exception as exc:  # noqa: BLE001 — настройка уже сохранена
             reindex = {"error": str(exc)}
+        priorities = catalog.source_priorities()
+        try:
+            # Сравнение — с отпечатком последнего успешного пересведения, а не с
+            # настройкой до PUT: новая версия пакета без версии и неудавшийся прошлый
+            # merge тоже требуют пересведения. Отпечаток читается под локом сверок:
+            # идущая сверка могла уже записать узлы по другому каталогу, но ещё не
+            # сбросить отпечаток (MEM-ADR-022, п. 5).
+            with reg.conn.transaction():
+                lock_reconciles(settings, reg.conn, ns)
+                if reg.merged_priorities(ns) == priority_fingerprint(priorities):
+                    merge = {"nodes": 0, "skipped": True}
+                else:
+                    merge = merge_namespace_nodes(settings, reg.conn, ns, catalog)
+                    reg.mark_merged(ns, priorities)
+        except Exception as exc:  # noqa: BLE001 — настройка уже сохранена
+            merge = {"error": str(exc)}
         return {
             "settings": conf.to_payload(),
             "catalog": catalog.to_payload(),
             "reindex": reindex,
+            "merge": merge,
         }
 
     return _with_registry(_write)
@@ -577,6 +706,8 @@ def memory_reconcile(
         ) from exc
     except StaleSnapshotError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except SchemaMigrationBusy as exc:
+        raise _migration_busy(exc) from exc
     except (SnapshotError, PackError, PackNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

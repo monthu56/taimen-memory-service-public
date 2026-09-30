@@ -10,7 +10,13 @@ from platform_memory.core import db as dbmod
 from platform_memory.core.config import Settings
 from platform_memory.core.llm_safety import neutralize_prompt_injection
 from platform_memory.core.models import Chunk
-from platform_memory.core.scopes import is_visible
+from platform_memory.core.scopes import (
+    check_write_scopes,
+    is_visible,
+    meta_scopes,
+    meta_with_scopes,
+    node_scopes,
+)
 from platform_memory.core.namespaces import resolve_namespace, resolve_namespaces
 from platform_memory.domain.registry import attach_kind_guard
 from platform_memory.graph import GraphStore, to_networkx
@@ -316,8 +322,12 @@ def retrieve_subgraph(
     max_seeds: int = 3,
     namespaces: Sequence[str] = (),
     embedder: Embedder | None = None,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Расширение по графу от vector-first seed'ов + сериализация подграфа под токен-бюджет.
+
+    ``allowed_scopes`` — видимость читающего (MEM-ADR-019; None — без ограничения):
+    seed'ы — только из видимых чанков, обход — только по видимым узлам.
 
     Глубже, чем ``retrieve`` (1–2 hop соседей): seed-узлы берутся из pgvector (с отсечением
     по разрыву скоров), затем BFS/DFS на ``depth`` шагов по проекции AGE-графа в NetworkX,
@@ -332,7 +342,7 @@ def retrieve_subgraph(
             conn, settings.chunks_table, settings.embedding_dim, settings.default_namespace
         )
         q_emb = embedder.embed_one(question)
-        hits = index.search(q_emb, question, k=k, namespaces=nss)
+        hits = index.search(q_emb, question, k=k, namespaces=nss, allowed_scopes=allowed_scopes)
 
         # Seed'ы из pgvector: максимум-скор на node_key, затем отсечение по разрыву.
         best: dict[str, float] = {}
@@ -343,7 +353,9 @@ def retrieve_subgraph(
         seeds = pick_seeds([(s, nk) for nk, s in scored], max_k=max_seeds)
 
         store = GraphStore(conn, settings.graph_name, settings.default_namespace)
-        G = to_networkx(store, namespaces=nss)
+        G = to_networkx(store, namespaces=nss, allowed_scopes=allowed_scopes)
+        if allowed_scopes is not None:
+            seeds = [n for n in seeds if n in G]  # чанк виден, а его узел — нет
         nodes, edges, text = expand_subgraph(
             G, seeds, mode=mode, depth=depth, token_budget=token_budget
         )
@@ -383,6 +395,7 @@ def write_and_index_fact(
     namespace: str = "",
     meta: dict[str, Any] | None = None,
     embedder: Embedder | None = None,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Записать агентский факт в граф И проиндексировать чанк для retrieval с цитатой.
 
@@ -390,6 +403,11 @@ def write_and_index_fact(
     добавляет чанк в векторный индекс, чтобы retrieve() нашёл факт и вернул source_path
     с корректной цитатой на агентский источник (не .md-файл vault).
     Запись — ровно в один ``namespace`` (пусто -> default).
+
+    ``allowed_scopes`` — видимость пишущего (None — без ограничения): узел или чанк
+    ключа вне неё не перезаписывается — :class:`ForeignObjectError` до любой записи;
+    scopes существующего объекта сливаются, а не стираются, и переходят на чанк
+    (MEM-ADR-019).
     """
     embedder = embedder or build_embedder(settings)
     source_path = source or f"agent:run/{run_id or '-'}"
@@ -400,36 +418,40 @@ def write_and_index_fact(
         graph = GraphStore(conn, settings.graph_name, settings.default_namespace)
         graph.ensure_schema()
         attach_kind_guard(graph, settings)  # строгий режим видов namespace (MEM-ADR-020)
-        result = graph.write_fact(
-            natural_key,
-            node_type,
-            title,
-            properties=properties,
-            links=links,
-            run_id=run_id,
-            confidence=confidence,
-            source=source,
-            trace_id=trace_id,
-            namespace=ns,
-        )
-
-        # Текст чанка: явный text > properties["content"] > title.
-        chunk_text = text or (properties or {}).get("content") or title
-        chunk = Chunk(
-            node_key=natural_key,
-            text=chunk_text,
-            source_path=source_path,
-            title=title,
-            namespace=ns,
-            meta=meta or {},
-        )
-
         index = VectorIndex(
             conn, settings.chunks_table, settings.embedding_dim, settings.default_namespace
         )
         index.ensure_schema()
+        check_write_scopes(meta_scopes(meta), allowed_scopes)  # scopes чанков — свои
+        # Текст чанка: явный text > properties["content"] > title. Эмбеддинг — до лока
+        # ключа: провайдер может быть сетевым, а лок держит других пишущих.
+        chunk = Chunk(
+            node_key=natural_key,
+            text=text or (properties or {}).get("content") or title,
+            source_path=source_path,
+            title=title,
+            namespace=ns,
+        )
         emb = embedder.embed_one(chunk.embedding_input())
-        index.add_chunks([chunk], [emb])
+        # Проверка чанков и узла ключа и запись — под одним локом ключа (MEM-ADR-019).
+        with index.key_write_lock(natural_key, ns):
+            chunk_scopes = index.guard_chunk_write(natural_key, ns, allowed_scopes)
+            result = graph.write_fact(
+                natural_key,
+                node_type,
+                title,
+                properties=properties,
+                links=links,
+                run_id=run_id,
+                confidence=confidence,
+                source=source,
+                trace_id=trace_id,
+                namespace=ns,
+                allowed_scopes=allowed_scopes,
+            )
+            written = graph.get_node(natural_key, namespaces=[ns]) or {}
+            chunk.meta = meta_with_scopes(meta, node_scopes(written), chunk_scopes)
+            index.add_chunks([chunk], [emb])
     finally:
         conn.close()
 

@@ -30,6 +30,7 @@ from platform_memory.core.llm_safety import neutralize_prompt_injection
 from platform_memory.core.namespaces import resolve_namespaces
 from platform_memory.core.observations import entity_ref_key
 from platform_memory.core.scopes import MAX_ALLOWED_SCOPES, is_visible, resolve_scopes
+from platform_memory.domain.merge import rank_by_catalogs
 from platform_memory.domain.reconcile import SnapshotLedger, valid_at
 from platform_memory.domain.registry import open_registry
 from platform_memory.domain.searchable import entity_index
@@ -256,7 +257,13 @@ def _resolve_channel(
     if not candidates:
         return [], [], []
     hits, report = resolve_candidates(
-        ledger, candidates, nss, catalogs=catalogs, as_of=as_of, allowed_scopes=allowed
+        ledger,
+        candidates,
+        nss,
+        catalogs=catalogs,
+        as_of=as_of,
+        allowed_scopes=allowed,
+        rank=rank_by_catalogs(dict(zip(nss, catalogs, strict=True))),
     )
     wanted = set(scopes)
     hits = [
@@ -771,6 +778,8 @@ def build_context(
                     "resolve_candidates": resolve_inputs,
                     "strategy": req.strategy or "hybrid",
                     "namespaces": nss,
+                    # видимость автора: по ней GET трейса решает, кому его показать
+                    "allowed_scopes": allowed,
                     "as_of": req.as_of,
                     "max_tokens": max_tokens,
                     # ephemeral_context сознательно НЕ сохраняется (§18) — только размер.

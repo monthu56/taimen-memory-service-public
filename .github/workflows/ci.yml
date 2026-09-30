@@ -1,0 +1,48 @@
+name: CI
+
+# Fast checks on every push to the trunk, on release tags and on pull requests:
+# ruff and the unit tests. No external services are started — integration tests
+# (tests/integration, marker `integration`) need PostgreSQL with AGE + pgvector
+# and run locally with CB_TEST_DATABASE_URL (see tests/integration/conftest.py).
+on:
+  push:
+    branches: [master, main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: memory-service
+    steps:
+      # platform-auth-sdk is a path dependency (../platform-auth-sdk, ADR-018;
+      # flat layout of the superproject, ADR-0029).
+      - uses: actions/checkout@v4
+        with:
+          path: memory-service
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.PLATFORM_AUTH_SDK_REPO || 'taimen-ai/platform-auth-sdk' }}
+          ssh-key: ${{ secrets.PLATFORM_AUTH_SDK_DEPLOY_KEY }}
+          path: platform-auth-sdk
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          cache-dependency-glob: memory-service/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen --extra mcp
+      - name: ruff
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Unit tests
+        env:
+          CB_TEST_DATABASE_URL: ""
+        run: uv run pytest -q -m "not integration"

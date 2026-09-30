@@ -125,7 +125,7 @@ def _install(monkeypatch, env: _Env, **overrides) -> TestClient:
         def count_edges_by_type(self, namespaces=None):
             return {}
 
-        def trace_subgraph(self, trace_id, namespace=""):
+        def trace_subgraph(self, trace_id, namespace="", allowed_scopes=None):
             return {"trace_id": trace_id, "events": [], "facts": []}
 
     class FakeIndex:

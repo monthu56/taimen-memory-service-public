@@ -127,7 +127,7 @@ def _install(
             ]
             return out[:limit]
 
-        def delete_node(self, natural_key, namespace=""):
+        def delete_node(self, natural_key, namespace="", allowed_scopes=None):
             return env.nodes.pop((namespace, natural_key), None)
 
         def record_audit(self, trace_id, actor, action, *, payload=None, namespace="", **kw):
@@ -177,7 +177,7 @@ def _install(
         def texts_for_node(self, node_key, namespace=""):
             return []
 
-        def delete_for_node(self, node_key, namespace=""):
+        def delete_for_node(self, node_key, namespace="", allowed_scopes=None):
             env.index_deleted.append((namespace, node_key))
             return 2
 

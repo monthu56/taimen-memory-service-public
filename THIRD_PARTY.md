@@ -119,7 +119,7 @@ The components below are used under the following conditions:
 - attrs 26.1.0 — MIT
 - cffi 2.1.0 — MIT-0
 - click 8.4.2 — BSD-3-Clause
-- cryptography 49.0.0 — Apache-2.0 OR BSD-3-Clause
+- cryptography 50.0.1 — Apache-2.0 OR BSD-3-Clause
 - distro 1.9.0 — Apache License, Version 2.0
 - fastapi 0.139.2 — MIT
 - h11 0.16.0 — MIT
@@ -145,7 +145,7 @@ The components below are used under the following conditions:
 - pydantic-settings 2.14.2 — MIT
 - pydantic_core 2.46.4 — MIT
 - Pygments 2.20.0 — BSD-2-Clause
-- PyJWT 2.13.0 — MIT
+- PyJWT 2.15.1 — MIT
 - python-dotenv 1.2.2 — BSD-3-Clause
 - python-multipart 0.0.32 — Apache-2.0
 - PyYAML 6.0.3 — MIT

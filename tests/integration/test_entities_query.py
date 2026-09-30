@@ -92,6 +92,15 @@ def test_valid_until_lte(settings, kb):
         "source_path": "snapshot:erp:main/s1",
         "valid_from": T1,
         "valid_to": None,
+        # MEM-ADR-022: источники сведения (здесь — один).
+        "sources": [
+            {
+                "source": "erp:main",
+                "scope": "",
+                "snapshot_id": "s1",
+                "source_path": "snapshot:erp:main/s1",
+            }
+        ],
     }
 
 

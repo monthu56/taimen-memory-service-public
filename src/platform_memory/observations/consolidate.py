@@ -17,11 +17,13 @@ semantics — в ``delete_observation`` (redact/purge + каскад на derive
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from platform_memory.core import db as dbmod
 from platform_memory.core.config import Settings
 from platform_memory.core.namespaces import resolve_namespace
+from platform_memory.core.scopes import audit_scopes, is_visible
 from platform_memory.graph.facts import FactStore
 from platform_memory.graph.store import GraphStore
 from platform_memory.index import VectorIndex
@@ -35,13 +37,18 @@ def consolidate(
     namespace: str = "",
     limit: int = 500,
     llm_extract: bool = False,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Прогнать consolidation; вернуть отчёт {processed, statuses, llm_extract}.
 
     Идемпотентно: повторный вызов на обработанных наблюдениях ничего не меняет.
+    ``allowed_scopes`` — видимость вызывающего (None — без ограничения): redrive и
+    счётчики отчёта — только по видимым ему наблюдениям (MEM-ADR-019).
     """
     ns = resolve_namespace(namespace, settings.default_namespace)
-    report = process_observations(settings, namespace=ns, limit=limit)
+    report = process_observations(
+        settings, namespace=ns, limit=limit, allowed_scopes=allowed_scopes
+    )
     report["llm_extract"] = "disabled"
     if llm_extract:
         # Extension point (§27): извлечение entities/relations из unstructured
@@ -59,6 +66,7 @@ def delete_observation(
     mode: str = "redact",
     actor: str = "api",
     trace_id: str = "",
+    allowed_scopes: Sequence[str] | None = None,
 ) -> dict[str, Any] | None:
     """Удалить/зачистить наблюдение и корректно отразить это на derived-памяти.
 
@@ -67,7 +75,9 @@ def delete_observation(
     text-assertions наблюдения, удаляются из индекса; из фактов вычёркивается
     observation_id, факты без оставшихся свидетельств помечаются
     ``evidence_lost`` и выпадают из retrieval (не из графа — история и аудит).
-    Событие удаления пишется в аудит-контур. None — наблюдение не найдено.
+    Событие удаления пишется в аудит-контур и несёт scopes наблюдения. None —
+    наблюдение не найдено или вне видимости ``allowed_scopes`` (MEM-ADR-019; None —
+    без ограничения): невидимое не трогается и неотличимо от отсутствующего.
     """
     if mode not in ("redact", "purge"):
         raise ValueError(f"Неизвестный режим удаления {mode!r}: redact | purge")
@@ -78,7 +88,7 @@ def delete_observation(
         if not obs_store.table_exists():
             return None
         record = obs_store.get(observation_id, namespaces=[ns])
-        if record is None:
+        if record is None or not is_visible(record.scopes, allowed_scopes):
             return None
         graph = GraphStore(conn, settings.graph_name, settings.default_namespace)
         dbmod.ensure_graph(conn, graph.graph)  # наблюдение могло не породить граф
@@ -111,6 +121,8 @@ def delete_observation(
                 "chunks_deleted": chunks_deleted,
                 "facts_evidence_lost": facts_lost,
                 "nodes_scrubbed": nodes_scrubbed,
+                # scopes наблюдения — чтобы трейс не показал событие чужому (MEM-ADR-019)
+                **audit_scopes(record.scopes),
             },
             namespace=ns,
         )

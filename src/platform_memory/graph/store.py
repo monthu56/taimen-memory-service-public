@@ -21,6 +21,14 @@ from platform_memory.core.db import agtype
 from platform_memory.core.models import Edge, Node, Provenance
 from platform_memory.core.namespaces import resolve_namespace, resolve_namespaces
 from platform_memory.core.ontology import sanitize_label
+from platform_memory.core.scopes import (
+    ForeignObjectError,
+    check_write_scopes,
+    is_visible,
+    merge_scopes,
+    node_scopes,
+    trace_node_scopes,
+)
 
 
 def _jsonable(value: Any) -> Any:
@@ -181,13 +189,25 @@ class GraphStore:
         psycopg.errors.InternalError_,
     )
 
-    def _locked_upsert(self, lock_key: str, sql: str, params: dict[str, Any]) -> Any:
-        """Выполнить upsert-запрос под advisory-локом, с повтором retryable-гонок AGE."""
+    def _locked_upsert(
+        self,
+        lock_key: str,
+        sql: str,
+        params: dict[str, Any],
+        prepare: Callable[[dict[str, Any]], None] | None = None,
+    ) -> Any:
+        """Выполнить upsert-запрос под advisory-локом, с повтором retryable-гонок AGE.
+
+        ``prepare`` вызывается под тем же локом до запроса и может поправить ``params``
+        по текущему состоянию узла (или отказать исключением) без гонки чтения и записи.
+        """
         attempts = 3
         for attempt in range(1, attempts + 1):
             try:
                 with self.conn.transaction():
                     self._serialize_upsert(lock_key)
+                    if prepare is not None:
+                        prepare(params)
                     with self.conn.cursor() as cur:
                         cur.execute(sql, (agtype(params),))
                         return cur.fetchone()
@@ -196,8 +216,21 @@ class GraphStore:
                     raise
         return None  # недостижимо; для mypy
 
-    def upsert_node(self, node: Node) -> None:
-        """Идемпотентно создать/обновить узел по (namespace, natural_key)."""
+    def upsert_node(
+        self,
+        node: Node,
+        *,
+        guard_scopes: bool = False,
+        allowed_scopes: Sequence[str] | None = None,
+    ) -> None:
+        """Идемпотентно создать/обновить узел по (namespace, natural_key).
+
+        ``guard_scopes`` — запись через API (MEM-ADR-019): существующий узел с тем же
+        ключом вне видимости ``allowed_scopes`` (None — без ограничения) не
+        перезаписывается — :class:`ForeignObjectError`; ``props.scopes`` видимого
+        узла сливаются по :func:`merge_scopes`, а не заменяются. Без флага —
+        прежняя замена ``props`` целиком (ингест vault, служебные узлы).
+        """
         label = sanitize_label(node.type)
         prov = node.provenance
         ns = self._ns(node.namespace)
@@ -220,7 +253,59 @@ class GraphStore:
             f"n.confidence=$conf, n.last_seen=$ls, n.origin=$origin, n.props=$props "
             f"RETURN id(n) $$, %s) AS (id agtype)"
         )
-        self._locked_upsert(f"{self.graph}:n:{label}:{ns}:{node.natural_key}", sql, params)
+        prepare = None
+        if guard_scopes:
+
+            def prepare(p: dict[str, Any]) -> None:
+                p["props"] = self._guarded_props(node.natural_key, ns, p["props"], allowed_scopes)
+
+        self._locked_upsert(f"{self.graph}:n:{label}:{ns}:{node.natural_key}", sql, params, prepare)
+
+    def _guarded_props(
+        self,
+        natural_key: str,
+        ns: str,
+        props: dict[str, Any],
+        allowed_scopes: Sequence[str] | None,
+    ) -> dict[str, Any]:
+        """``props`` записи со слитыми scopes; отказ, если узел с ключом чужой или
+        запись несёт scope видимости не из ``allowed_scopes`` (:func:`check_write_scopes`).
+
+        Учитываются все узлы ключа в namespace, какого бы вида они ни были: чтение и
+        удаление по ключу вид не учитывают, а запись другим видом создаёт второй узел
+        с тем же ключом — он наследует scopes прежних, а не становится общим.
+        """
+        existing = self._nodes_with_key(natural_key, ns)
+        if any(not is_visible(node_scopes(n), allowed_scopes) for n in existing):
+            raise ForeignObjectError(natural_key)
+        incoming = node_scopes({"props": props})
+        check_write_scopes(incoming, allowed_scopes)
+        before = [s for n in existing for s in node_scopes(n)] if existing else None
+        merged = merge_scopes(before, incoming)
+        out = {k: v for k, v in props.items() if k != "scopes"}
+        if merged:
+            out["scopes"] = merged
+        return out
+
+    def key_visible(
+        self, natural_key: str, namespace: str = "", allowed_scopes: Sequence[str] | None = None
+    ) -> bool:
+        """Видны ли ``allowed_scopes`` все узлы ключа в namespace (нет узлов — True)."""
+        if allowed_scopes is None:
+            return True
+        existing = self._nodes_with_key(natural_key, self._ns(namespace))
+        return all(is_visible(node_scopes(n), allowed_scopes) for n in existing)
+
+    def _nodes_with_key(self, natural_key: str, ns: str) -> list[dict[str, Any]]:
+        sql = (
+            f"SELECT * FROM cypher('{self.graph}', $$ "
+            f"MATCH (n {{natural_key: $nk}}) WHERE n.namespace = $ns RETURN properties(n) "
+            f"$$, %s) AS (props agtype)"
+        )
+        with self.conn.cursor() as cur:
+            cur.execute(sql, (agtype({"nk": natural_key, "ns": ns}),))
+            rows = cur.fetchall()
+        return [dbmod.parse_agtype(r[0]) for r in rows]
 
     # --- батчевые операции сверки снимков (MEM-ADR-020) ---
 
@@ -512,8 +597,13 @@ class GraphStore:
         source: str | None = None,
         trace_id: str | None = None,
         namespace: str = "",
+        allowed_scopes: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Записать факт авторства агента (origin='agent'). Переживает ре-ingest (не подметается).
+
+        Перезапись существующего узла проверяет видимость ``allowed_scopes`` и сливает
+        ``props.scopes`` (``upsert_node(guard_scopes=True)``, MEM-ADR-019); ``links`` к
+        невидимым узлам не создаются, как к отсутствующим.
 
         Замыкает цикл «mini-app читают И пишут в Brain». Рёбра LINKS_TO создаются к уже
         существующим узлам-целям. Если задан ``trace_id`` — факт привязывается ребром
@@ -536,9 +626,11 @@ class GraphStore:
                 source_path=src, source_id=run_id, confidence=confidence, last_seen=now
             ),
         )
-        self.upsert_node(node)
+        self.upsert_node(node, guard_scopes=True, allowed_scopes=allowed_scopes)
         edges_made = 0
         for dst in links or []:
+            if not self.key_visible(dst, ns, allowed_scopes):
+                continue  # невидимая цель — как отсутствующая: счётчик её не выдаёт
             edge = Edge(
                 type="LINKS_TO",
                 src=natural_key,
@@ -715,31 +807,49 @@ class GraphStore:
         return {"natural_key": nk, "namespace": ns, "trace": anchor, "action": action, "ts": ts}
 
     def trace_subgraph(
-        self, trace_id: str, *, limit: int = 200, namespace: str = ""
+        self,
+        trace_id: str,
+        *,
+        limit: int = 200,
+        namespace: str = "",
+        allowed_scopes: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Вернуть подграф трейса задачи: события аудита (по времени) и привязанные факты.
 
         Источник для проверки сквозного сценария и для UI «Память и трейс по задаче».
+        ``allowed_scopes`` (не None) — видимость вызывающего (MEM-ADR-019): узлы вне
+        неё отбрасываются до ``limit``. Scope факта — его ``props.scopes``, события
+        аудита — ещё и ``props.payload.scopes`` (scopes удалённого объекта).
+        Фильтр — в Python (``trace_node_scopes`` + ``is_visible``), а не в Cypher:
+        payload события приходит от клиента, и предикат по произвольному agtype
+        (объект, строка вместо списка) падал бы на весь трейс.
         """
         anchor = self.trace_anchor_key(trace_id)
         ns = self._ns(namespace)
+        params: dict[str, Any] = {"nk": anchor, "ns": ns}
+        # С фильтром видимости лимит считается после него — в цикле ниже.
+        sql_limit = f" LIMIT {int(limit)}" if allowed_scopes is None else ""
         sql = (
             f"SELECT * FROM cypher('{self.graph}', $$ "
             f"MATCH (n)-[:IN_TRACE]->(a {{natural_key: $nk, namespace: $ns}}) "
-            f"RETURN properties(n) $$, %s) AS (props agtype) LIMIT {int(limit)}"
+            f"RETURN properties(n) $$, %s) AS (props agtype){sql_limit}"
         )
         events: list[dict[str, Any]] = []
         facts: list[dict[str, Any]] = []
         with self.conn.cursor() as cur:
-            cur.execute(sql, (agtype({"nk": anchor, "ns": ns}),))
-            for (props,) in cur.fetchall():
+            cur.execute(sql, (agtype(params),))
+            for (props,) in cur:
                 parsed = dbmod.parse_agtype(props)
                 if not isinstance(parsed, dict):
+                    continue
+                if not is_visible(trace_node_scopes(parsed), allowed_scopes):
                     continue
                 if parsed.get("type") == "audit_event":
                     events.append(parsed)
                 else:
                     facts.append(parsed)
+                if len(events) + len(facts) >= limit:
+                    break
 
         def _ts(node: dict[str, Any]) -> str:
             inner = node.get("props")
@@ -769,16 +879,24 @@ class GraphStore:
             row = cur.fetchone()
         return dbmod.parse_agtype(row[0]) if row else None
 
-    def delete_node(self, natural_key: str, namespace: str = "") -> dict[str, Any] | None:
+    def delete_node(
+        self,
+        natural_key: str,
+        namespace: str = "",
+        *,
+        allowed_scopes: Sequence[str] | None = None,
+    ) -> dict[str, Any] | None:
         """Удалить узел вместе с рёбрами (DETACH DELETE); вернуть снапшот свойств.
 
-        None — если узла нет. Защищённые типы (PROTECTED_TYPES) не удаляет — ValueError.
+        None — если узла нет или он вне видимости ``allowed_scopes`` (MEM-ADR-019;
+        None — без ограничения): невидимый узел не удаляется и неотличим от
+        отсутствующего. Защищённые типы (PROTECTED_TYPES) не удаляет — ValueError.
         Чанки индекса не трогает (слой VectorIndex); аудит пишет вызывающий — снапшот
         возвращается именно для payload аудит-события.
         """
         ns = self._ns(namespace)
         snapshot = self.get_node(natural_key, namespaces=[ns])
-        if snapshot is None:
+        if snapshot is None or not is_visible(node_scopes(snapshot), allowed_scopes):
             return None
         assert_deletable(str(snapshot.get("type") or ""))
         with self.conn.cursor() as cur:

@@ -162,6 +162,7 @@ class KindRegistry:
         self.tenant_table = f"{packs_table}_tenant"
         self._exists: bool | None = None
         self._tenant_exists: bool | None = None
+        self._merged_column: bool | None = None
         self._catalogs: dict[str, KindCatalog] = {}
 
     def _tbl(self, name: str) -> sql.Identifier:
@@ -200,6 +201,12 @@ class KindRegistry:
                     """
                 ).format(settings=self._tbl(self.settings_table))
             )
+            # Отпечаток sourcePriority последнего успешного пересведения узлов (MEM-ADR-022).
+            cur.execute(
+                sql.SQL(
+                    "ALTER TABLE {settings} ADD COLUMN IF NOT EXISTS merged_priority jsonb"
+                ).format(settings=self._tbl(self.settings_table))
+            )
             cur.execute(
                 sql.SQL(
                     """
@@ -218,6 +225,7 @@ class KindRegistry:
             )
         self._exists = True
         self._tenant_exists = True
+        self._merged_column = True
         self._catalogs.clear()
 
     def table_exists(self) -> bool:
@@ -554,6 +562,81 @@ class KindRegistry:
         self._catalogs.clear()
         return self.get_settings(ns)
 
+    def _has_merged_column(self) -> bool:
+        """Есть ли колонка отпечатка: таблица настроек старше MEM-ADR-022 без неё, пока
+        ``ensure_schema`` не выполнен, — отпечатка нет."""
+        if self._merged_column is None:
+            if not self.table_exists():
+                return False
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    "SELECT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(%s) "
+                    "AND attname = 'merged_priority' AND NOT attisdropped)",
+                    (f"public.{self.settings_table}",),
+                )
+                row = cur.fetchone()
+            self._merged_column = bool(row and row[0])
+        return self._merged_column
+
+    def merged_priorities(self, namespace: str) -> dict[str, list[str]] | None:
+        """``sourcePriority`` видов, по которому узлы namespace сведены в последний раз
+        (``mark_merged``); None — пересведения ещё не было или его результат устарел
+        (``reset_stale_merge``) (MEM-ADR-022).
+
+        Колонку создаёт ``ensure_schema`` (его вызывает ``put_settings``).
+        """
+        ns = resolve_namespace(namespace, self.default_namespace)
+        if not self._has_merged_column():
+            return None
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("SELECT merged_priority FROM {t} WHERE namespace = %s").format(
+                    t=self._tbl(self.settings_table)
+                ),
+                (ns,),
+            )
+            row = cur.fetchone()
+        return row[0] if row is not None and isinstance(row[0], dict) else None
+
+    def mark_merged(self, namespace: str, priorities: dict[str, Sequence[str]]) -> None:
+        """Запомнить ``sourcePriority``, по которому узлы namespace только что сведены.
+
+        Вызывать после успешного ``merge_namespace_nodes`` в той же транзакции. Схему
+        (``ensure_schema``) вызывающий гарантирует до транзакции: DDL внутри неё держал
+        бы исключительный лок таблицы настроек до конца пересведения.
+        """
+        ns = validate_namespace(resolve_namespace(namespace, self.default_namespace))
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "INSERT INTO {t} (namespace, merged_priority) VALUES (%s, %s) "
+                    "ON CONFLICT (namespace) DO UPDATE SET "
+                    "merged_priority = EXCLUDED.merged_priority"
+                ).format(t=self._tbl(self.settings_table)),
+                (ns, Jsonb(priority_fingerprint(priorities))),
+            )
+
+    def reset_stale_merge(self, namespace: str, priorities: dict[str, Sequence[str]]) -> bool:
+        """Сбросить отпечаток, если узлы только что записаны по другому ``sourcePriority``.
+
+        Вызывает сверка снимка в своей транзакции под advisory-локом namespace: она
+        сводит узлы по каталогу, прочитанному ею, и отпечаток прежнего пересведения
+        больше не описывает все узлы — следующий ``PUT …/kinds`` пересведёт namespace.
+        True — отпечаток сброшен.
+        """
+        ns = resolve_namespace(namespace, self.default_namespace)
+        stored = self.merged_priorities(ns)
+        if stored is None or stored == priority_fingerprint(priorities):
+            return False
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("UPDATE {t} SET merged_priority = NULL WHERE namespace = %s").format(
+                    t=self._tbl(self.settings_table)
+                ),
+                (ns,),
+            )
+        return True
+
     # --- каталог и проверка видов ---
 
     def catalog_for(self, namespace: str) -> KindCatalog:
@@ -583,6 +666,11 @@ class KindRegistry:
         return self.catalog_for(namespace).check_entity(
             kind, natural_key=natural_key, attributes=attributes
         )
+
+
+def priority_fingerprint(priorities: dict[str, Sequence[str]]) -> dict[str, list[str]]:
+    """``sourcePriority`` видов в виде, сравнимом с сохранённым ``merged_priorities``."""
+    return {kind: list(order) for kind, order in sorted(priorities.items())}
 
 
 def open_registry(conn: psycopg.Connection, settings) -> KindRegistry:

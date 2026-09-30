@@ -128,6 +128,15 @@ def test_provenance_path_and_fact_id_bound_to_source():
     assert a != fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s2")
 
 
+def test_fact_id_salted_only_by_repeated_application():
+    """A → B → A: повторное применение снимка не совпадает с id закрытого ребра, а id
+    первого применения — прежние (рёбра, записанные до амендмента, не меняются)."""
+    a = fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s1")
+    assert fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s1", 1) == a
+    second = fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s1", 2)
+    assert second not in {a, fact_id_for_version("ns", "git:a", "a", "calls\x1fx", "s1", 3)}
+
+
 def test_changes_payload_sorted_limited_and_flags_truncation():
     keys = {
         "opened": [Ref("endpoint", "b"), Ref("adr", "z"), Ref("endpoint", "a")],

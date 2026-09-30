@@ -57,6 +57,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/platform_memory"]
 
+[tool.uv]
+# Нижняя граница транзитивных зависимостей по алертам безопасности: сами пакеты
+# сервис не импортирует, но lock не должен откатиться ниже исправленной версии.
+# cryptography приходит через pyjwt[crypto] (platform-auth-sdk); 49.0.0 — алерт high.
+# pyjwt приходит через platform-auth-sdk; в 2.13.0 — 11 алертов, один critical.
+constraint-dependencies = ["cryptography>=50.0.0", "pyjwt>=2.14"]
+
 [tool.uv.sources]
 # Общий enforcement SDK — соседний репозиторий суперпроекта (ADR-0013/0030): поэтому
 # контекст docker build — корень суперпроекта, а не каталог сервиса (см. Dockerfile).

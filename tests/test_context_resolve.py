@@ -201,10 +201,14 @@ def test_suffix_names():
 
 
 def test_suffix_query_only_for_unresolved():
+    # Последний "keys" — дочитывание всех версий сущностей, разрешённых не по ключу
+    # (сведение источников, MEM-ADR-022).
     _, _, ledger = _resolve(["goal.created", "CP-ADR-0062"])
-    assert ledger.calls == ["keys", "aliases"]
+    assert ledger.calls == ["keys", "aliases", "keys"]
     _, _, ledger = _resolve(["goal.created", "get_claimability"])
-    assert ledger.calls == ["keys", "aliases", "suffixes"]
+    assert ledger.calls == ["keys", "aliases", "suffixes", "keys"]
+    _, _, ledger = _resolve(["goal.created"])
+    assert ledger.calls == ["keys", "aliases"]
 
 
 def test_kind_hint_filters(catalog):

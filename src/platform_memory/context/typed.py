@@ -70,6 +70,7 @@ from platform_memory.context.trace import ContextTraceStore
 from platform_memory.context.where import WhereClause, parse_where
 from platform_memory.context.where import matches as where_matches
 from platform_memory.domain.reconcile import SnapshotLedger, valid_at
+from platform_memory.domain.merge import merge_rows, rank_by_catalog, rank_by_catalogs
 from platform_memory.domain.registry import open_registry
 from platform_memory.domain.searchable import entity_index
 from platform_memory.graph.facts import normalize_ts
@@ -296,33 +297,42 @@ class _Compiler:
     def entity_state(self, node: dict[str, Any]) -> dict[str, Any] | None:
         """Запись сущности на as_of либо None (не видна: закрыта, вне scope, не существовала)."""
         props = node.get("props") if isinstance(node.get("props"), dict) else {}
-        if not is_visible(_scopes(props), self.allowed):
-            return None
         ns, kind, key = _ident(node)
         versions = self._versions.get((ns, kind, key)) or []
+        if not versions and not is_visible(_scopes(props), self.allowed):
+            return None
         as_of = self.req.as_of
         snapshot = props.get("snapshot") if isinstance(props.get("snapshot"), dict) else None
         if versions:
-            live = [v for v in versions if valid_at(v["valid_from"], v["valid_to"], as_of)]
+            # Сведение версий источников, действовавших на as_of и видимых вызывающему
+            # (MEM-ADR-022): видимость — по scopes каждой версии, а не узла.
+            live = [
+                {**v, "namespace": ns, "kind": kind, "key": key}
+                for v in versions
+                if valid_at(v["valid_from"], v["valid_to"], as_of)
+                and is_visible(_scopes(v["payload"]), self.allowed)
+            ]
             if not live:
                 return None
-            version = live[-1]
-            payload = version["payload"]
+            catalog = self.catalogs.get(ns)
+            merged = merge_rows(live, rank_by_catalog(catalog) if catalog else None)
+            payload = merged["payload"]
             attributes = dict(payload.get("attributes") or {})
             aliases = list(payload.get("aliases") or [])
             provenance = payload.get("provenance")
             title = str(payload.get("title") or node.get("title") or key)
             snapshot = {
-                "source": version["source"],
-                "scope": version["scope"],
-                "snapshot_id": version["snapshot_id"],
+                "source": merged["source"],
+                "scope": merged["scope"],
+                "snapshot_id": merged["snapshot_id"],
             }
-            valid_from, valid_to = version["valid_from"], version["valid_to"]
-            # Цитата — источник той версии, что действовала на as_of.
-            source_path = str(
-                payload.get("source_path")
-                or f"snapshot:{version['source']}/{version['snapshot_id']}"
-            )
+            valid_from, valid_to = merged["valid_from"], merged["valid_to"]
+            # Цитата — старшая из версий, что действовали на as_of; sources — все.
+            source_path = str(payload.get("source_path") or "")
+            sources = [
+                {k: v[k] for k in ("source", "scope", "snapshot_id", "source_path")}
+                for v in merged["sources"]
+            ]
         else:
             valid_from = node.get("valid_from")
             valid_to = node.get("valid_to")
@@ -333,6 +343,7 @@ class _Compiler:
             provenance = props.get("provenance")
             title = str(node.get("title") or key)
             source_path = str(node.get("source_path") or "")
+            sources = []
         return {
             "natural_key": key,
             "kind": kind,
@@ -345,6 +356,7 @@ class _Compiler:
             "valid_from": valid_from,
             "valid_to": valid_to,
             "snapshot": snapshot,
+            "sources": sources,
             "reached_via": [],
         }
 
@@ -524,6 +536,7 @@ class _Compiler:
                     allowed_scopes=self.allowed,
                     limit=MAX_RESOLVED * 10 * len(todo) * len(nss),
                     per_namespace=True,
+                    rank=rank_by_catalogs(self.catalogs),
                 )
                 for (j, ns), match in found.items():
                     if len(match.hits) > MAX_RESOLVED:
@@ -893,25 +906,32 @@ def compile_typed_context(
 
         snapshots: list[dict[str, str]] = []
         for item in [*compiler.entities.values(), *facts]:
-            snap = item.get("snapshot")
-            if snap and snap not in snapshots:
-                snapshots.append(snap)
+            # Сущность, сведённая из нескольких источников, собрана из всех их снимков.
+            contributed = [
+                {"source": v["source"], "scope": v["scope"], "snapshot_id": v["snapshot_id"]}
+                for v in item.get("sources") or []
+            ]
+            for snap in contributed or [item.get("snapshot")]:
+                if snap and snap not in snapshots:
+                    snapshots.append(snap)
         snapshots.sort(key=lambda s: (s["source"], s["snapshot_id"]))
 
         sources: list[dict[str, str]] = []
         seen_src: set[tuple[str, str]] = set()
         for section in sections:
             for ent in section["items"]:
-                key = (ent["source_path"], ent["natural_key"])
-                if ent["source_path"] and key not in seen_src:
-                    seen_src.add(key)
-                    sources.append(
-                        {
-                            "source_path": ent["source_path"],
-                            "node_key": ent["natural_key"],
-                            "title": ent["title"],
-                        }
-                    )
+                paths = [ent["source_path"], *(v["source_path"] for v in ent.get("sources") or [])]
+                for path in paths:
+                    key = (path, ent["natural_key"])
+                    if path and key not in seen_src:
+                        seen_src.add(key)
+                        sources.append(
+                            {
+                                "source_path": path,
+                                "node_key": ent["natural_key"],
+                                "title": ent["title"],
+                            }
+                        )
 
         pack = {
             "as_of": req.as_of,
@@ -958,6 +978,8 @@ def compile_typed_context(
                     ],
                     "as_of": req.as_of,
                     "namespaces": req.namespaces,
+                    # видимость автора: по ней GET трейса решает, кому его показать
+                    "allowed_scopes": allowed,
                     "allow_semantic": req.allow_semantic,
                     **({"where": [c.to_dict() for c in req.where]} if req.where else {}),
                 },

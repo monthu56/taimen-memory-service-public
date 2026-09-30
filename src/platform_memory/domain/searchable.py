@@ -6,7 +6,8 @@
 
 * по ключам, тронутым сверкой (открытые, изменённые, закрытые), — в той же транзакции,
   что и сверка: сущность индексируется при открытии и изменении и снимается при
-  закрытии; закрытая одним источником, но открытая другим — остаётся с его версией;
+  закрытии; закрытая одним источником, но открытая другим — остаётся со сведением
+  оставшихся версий (текст — сведённые атрибуты всех источников, MEM-ADR-022);
 * по всему namespace (``keys=None``) — переиндексация при смене пакетов namespace
   (``PUT …/kinds``): виды, ставшие индексируемыми, добавляются, переставшие — снимаются,
   изменившиеся ``fields`` — пересчитываются.
@@ -27,6 +28,7 @@ import psycopg
 from platform_memory.core.config import Settings
 from platform_memory.core.kinds import KindCatalog
 from platform_memory.core.ontology import sanitize_label
+from platform_memory.domain.merge import rank_by_catalog
 from platform_memory.index.embeddings import Embedder
 from platform_memory.index.entities import EntityIndex, EntityRow
 
@@ -103,9 +105,10 @@ def sync_entities(
     """
     counts = {"indexed": 0, "updated": 0, "removed": 0, "unchanged": 0}
     searchable = sorted(catalog.searchable_kinds())
+    rank = rank_by_catalog(catalog)
     if idents is None:
         wanted = None
-        versions = ledger.open_entity_versions(ns, searchable)
+        versions = ledger.open_entity_versions(ns, searchable, rank=rank)
         existing = index.rows(ns)
     else:
         wanted = set(idents)
@@ -116,7 +119,7 @@ def sync_entities(
         versions = [
             v
             for v in ledger.open_entity_versions(
-                ns, [k for k in kinds if k in searchable], [key for _, key in wanted]
+                ns, [k for k in kinds if k in searchable], [key for _, key in wanted], rank=rank
             )
             if (v["kind"], v["key"]) in wanted
         ]
@@ -167,12 +170,21 @@ def reindex_namespace(
     index.ensure_schema()
     source = ledger if ledger.table_exists() else _EmptyLedger()
     with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (reconcile_lock_key(sanitize_label(settings.graph_name), ns),),
-            )
+        lock_reconciles(settings, conn, ns)
         return sync_entities(index, source, ns, catalog, embedder)
+
+
+def lock_reconciles(settings: Settings, conn: psycopg.Connection, ns: str) -> None:
+    """Взять advisory-лок сверок namespace до конца текущей транзакции.
+
+    Вызывать внутри ``conn.transaction()``. В той же сессии лок берётся повторно
+    (вложенные ``reindex_namespace``/``merge_namespace_nodes`` не блокируются).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (reconcile_lock_key(sanitize_label(settings.graph_name), ns),),
+        )
 
 
 def reconcile_lock_key(graph_name: str, ns: str) -> str:
@@ -190,6 +202,7 @@ class _EmptyLedger:
 __all__ = [
     "desired_rows",
     "entity_index",
+    "lock_reconciles",
     "reconcile_lock_key",
     "reindex_namespace",
     "sync_entities",

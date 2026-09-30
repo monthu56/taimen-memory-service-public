@@ -24,6 +24,12 @@ from platform_memory.core.models import Node, Provenance
 from platform_memory.core.namespaces import resolve_namespace, resolve_namespaces
 from platform_memory.core.observations import EVIDENCE_ASSERTED, EVIDENCE_CLASSES
 from platform_memory.core.ontology import sanitize_label
+from platform_memory.core.scopes import (
+    ForeignObjectError,
+    check_write_scopes,
+    is_visible,
+    merge_scopes,
+)
 from platform_memory.graph.store import GraphStore
 
 # Ранг силы свидетельства для ranking/конфликтов (больше — сильнее).
@@ -83,6 +89,7 @@ class FactStore:
         source_path: str = "",
         scopes: Sequence[str] = (),
         check_kind: bool = True,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> str:
         """Идемпотентно создать узел-сущность (origin='agent'); вернуть natural_key.
 
@@ -90,6 +97,8 @@ class FactStore:
         placeholder'ом, если entity-assertion ещё не приезжал. Вид проверяется
         kind-guard'ом стора (строгий режим namespace, MEM-ADR-020); ``check_kind=False``
         — для контентных узлов (текст наблюдения), которые не являются сущностями.
+        Существующий узел вне видимости ``allowed_scopes`` не перезаписывается
+        (:class:`ForeignObjectError`), scopes видимого сливаются (MEM-ADR-019).
         """
         ns = self._ns(namespace)
         if check_kind and self.store.kind_guard is not None:
@@ -112,7 +121,9 @@ class FactStore:
                     confidence=1.0,
                     last_seen=_now_iso(),
                 ),
-            )
+            ),
+            guard_scopes=True,
+            allowed_scopes=allowed_scopes,
         )
         return natural_key
 
@@ -134,6 +145,7 @@ class FactStore:
         supersedes: str = "",
         scopes: Sequence[str] = (),
         source_path: str = "",
+        allowed_scopes: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         """Записать temporal-факт; вернуть {fact_id, reinforced, superseded}.
 
@@ -141,6 +153,12 @@ class FactStore:
         того же утверждения усиливает факт (добавляет observation_id, поднимает
         confidence до максимума), а не дублирует ребро. ``supersedes`` в той же
         транзакции закрывает валидность старого факта. Историю не удаляет.
+
+        ``allowed_scopes`` — видимость пишущего (None — без ограничения, MEM-ADR-019):
+        конец факта или существующий факт вне неё — :class:`ForeignObjectError`, scopes
+        видимости записи — только из неё; scopes повторённого факта сливаются
+        (:func:`merge_scopes`), а не заменяются. Невидимый ``supersedes`` не
+        закрывается — как отсутствующий.
         """
         if evidence not in EVIDENCE_CLASSES:
             raise ValueError(f"Неизвестный класс свидетельства {evidence!r}")
@@ -154,7 +172,7 @@ class FactStore:
         fid = fact_id_for(ns, subject, predicate, obj, valid_from)
         confidence = max(0.0, min(1.0, float(confidence)))
 
-        existing = self.get_fact(fid, namespaces=[ns])
+        check_write_scopes(scopes, allowed_scopes)
         params: dict[str, Any] = {
             "src": subject,
             "dst": obj,
@@ -169,14 +187,6 @@ class FactStore:
             "sup": supersedes or None,
             "sp": source_path or "memory:observation",
         }
-        if existing:
-            # Reinforcement: тот же факт из нового наблюдения (ADR-016 §26).
-            obs_ids = list(existing.get("observation_ids") or [])
-            if observation_id and observation_id not in obs_ids:
-                obs_ids.append(observation_id)
-            params["obs"] = obs_ids
-            params["conf"] = max(float(existing.get("confidence") or 0.0), confidence)
-
         sql = (
             f"SELECT * FROM cypher('{self.graph}', $$ "
             f"MATCH (a {{natural_key: $src, namespace: $ns}}), "
@@ -195,6 +205,21 @@ class FactStore:
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (f"{self.graph}:fact:{fid}",),
                 )
+            for key in (subject, obj):
+                if not self.store.key_visible(key, ns, allowed_scopes):
+                    raise ForeignObjectError(key)
+            # Существующий факт читается под локом: проверка и слияние без гонки.
+            existing = self.get_fact(fid, namespaces=[ns])
+            if existing:
+                if not is_visible(_fact_scopes(existing), allowed_scopes):
+                    raise ForeignObjectError(fid)
+                # Reinforcement: тот же факт из нового наблюдения (ADR-016 §26).
+                obs_ids = list(existing.get("observation_ids") or [])
+                if observation_id and observation_id not in obs_ids:
+                    obs_ids.append(observation_id)
+                params["obs"] = obs_ids
+                params["conf"] = max(float(existing.get("confidence") or 0.0), confidence)
+                scopes = merge_scopes(_fact_scopes(existing), scopes)
             if scopes:
                 params["scopes"] = list(scopes)
                 scope_sql = sql.replace("r.origin='agent' ", "r.origin='agent', r.scopes=$scopes ")
@@ -207,7 +232,11 @@ class FactStore:
                 raise ValueError(
                     f"Концы факта не найдены в namespace {ns!r}: {subject!r} -> {obj!r}"
                 )
-            if supersedes and supersedes != fid:
+            if (
+                supersedes
+                and supersedes != fid
+                and self._fact_visible(supersedes, ns, allowed_scopes)
+            ):
                 superseded = self._close_fact(
                     supersedes,
                     ns,
@@ -215,6 +244,13 @@ class FactStore:
                     superseded_by=fid,
                 )
         return {"fact_id": fid, "reinforced": bool(existing), "superseded": superseded}
+
+    def _fact_visible(self, fact_id: str, ns: str, allowed_scopes: Sequence[str] | None) -> bool:
+        """Виден ли факт ``allowed_scopes`` (нет факта — True: закрывать нечего)."""
+        if allowed_scopes is None:
+            return True
+        fact = self.get_fact(fact_id, namespaces=[ns])
+        return fact is None or is_visible(_fact_scopes(fact), allowed_scopes)
 
     # --- батчевые операции сверки снимков (MEM-ADR-020) ---
 
@@ -546,6 +582,12 @@ class FactStore:
                             if fid and fid not in lst:
                                 lst.append(fid)
         return facts
+
+
+def _fact_scopes(fact: dict[str, Any]) -> list[str]:
+    """Scopes факта (свойство ребра ``scopes``; нет или не список — пусто)."""
+    raw = fact.get("scopes")
+    return [str(s) for s in raw] if isinstance(raw, list | tuple) else []
 
 
 def _connect_stores(settings) -> tuple[psycopg.Connection, GraphStore, FactStore]:

@@ -28,6 +28,7 @@ from platform_memory_client.models import (
     DocumentIngestResult,
     EntitiesPage,
     EntityItem,
+    EntitySource,
     Memory,
     NamespaceKinds,
     NodeDeleteResult,
@@ -77,4 +78,5 @@ __all__ = [
     "TypedContextPack",
     "EntitiesPage",
     "EntityItem",
+    "EntitySource",
 ]

@@ -12,6 +12,7 @@ Retrieval-поверхность: русский FTS по content + trigram-со
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -59,6 +60,11 @@ class ObservationRecord:
     status: str = STATUS_RECEIVED
     status_detail: str = ""
     score: float = 0.0  # релевантность при поиске (не хранится)
+    # Видимость пишущего на момент приёма (MEM-ADR-019): {"scopes": [...]} или
+    # {"scopes": None} — без ограничения; None — не записана (наблюдение до
+    # TASK-001056). Читает только redrive; в API-ответы не выдаётся — это
+    # членство пишущего в воркспейсах, а не свойство наблюдения.
+    writer_visibility: dict[str, Any] | None = None
 
     def to_payload(self) -> dict[str, Any]:
         """Представление для API-ответов (без внутреннего PK)."""
@@ -92,8 +98,19 @@ _COLUMNS = (
 )
 
 
+class SchemaMigrationBusy(RuntimeError):
+    """Аддитивная миграция таблицы наблюдений не дождалась лока — повторить позже."""
+
+
 class ObservationStore:
     """Хранилище наблюдений: идемпотентная вставка, статусы, lexical retrieval."""
+
+    # Ожидание лока аддитивной миграции (``_add_writer_visibility``). Пока ALTER
+    # ждёт лок, за ним стоят все новые запросы к таблице: ожидание короткое (≤ 1 с),
+    # а попыток много, и между ними — пауза, в которую очередь рассасывается.
+    MIGRATION_LOCK_TIMEOUT_MS = 500
+    MIGRATION_ATTEMPTS = 10
+    MIGRATION_RETRY_PAUSE = 1.0  # секунд
 
     def __init__(self, conn: psycopg.Connection, table: str, default_namespace: str = ""):
         """Инициализировать стор на соединении, таблице и default-namespace."""
@@ -137,11 +154,17 @@ class ObservationStore:
                         content_hash   text NOT NULL DEFAULT '',
                         status         text NOT NULL DEFAULT 'received',
                         status_detail  text NOT NULL DEFAULT '',
-                        processed_at   timestamptz
+                        processed_at   timestamptz,
+                        writer_visibility jsonb
                     )
                     """
                 ).format(tbl=self._tbl)
             )
+            # Аддитивная миграция таблиц до TASK-001056: у прежних строк — NULL.
+            # ALTER берёт эксклюзивный лок даже с IF NOT EXISTS, а ensure_schema
+            # зовётся на каждый приём — поэтому сначала дешёвая проверка каталога.
+            if not self._has_writer_visibility():
+                self._add_writer_visibility()
             cur.execute(
                 sql.SQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS {ix} ON {tbl} (namespace, observation_id)"
@@ -174,6 +197,67 @@ class ObservationStore:
             )
         self._ensure_trgm()
 
+    def _add_writer_visibility(self) -> None:
+        """``ALTER TABLE … ADD COLUMN writer_visibility`` с ограниченным ожиданием лока.
+
+        ALTER ждёт ACCESS EXCLUSIVE, пока открыт любой читатель таблицы (например,
+        ``pg_dump``), а все новые запросы к ней встают в очередь за ALTER — без
+        ``lock_timeout`` долгий читатель останавливает приём наблюдений целиком.
+        Поэтому попытка ждёт не дольше ``MIGRATION_LOCK_TIMEOUT_MS``, попыток
+        ``MIGRATION_ATTEMPTS`` с паузой ``MIGRATION_RETRY_PAUSE`` (очередь между
+        ними рассасывается), затем — :class:`SchemaMigrationBusy`.
+
+        ALTER пробует только сеанс, взявший advisory-лок миграции таблицы: без него
+        попытки параллельных запросов шли бы внахлёст и держали очередь за ALTER
+        непрерывно. Остальные не встают в очередь к таблице, а после паузы
+        проверяют каталог — колонку мог добавить сеанс с локом.
+        """
+        for attempt in range(1, self.MIGRATION_ATTEMPTS + 1):
+            if attempt > 1:
+                time.sleep(self.MIGRATION_RETRY_PAUSE)
+                if self._has_writer_visibility():
+                    return
+            try:
+                with self.conn.transaction(), self.conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_try_advisory_xact_lock(hashtext(%s))",
+                        (self.migration_lock_name,),
+                    )
+                    if not cur.fetchone()[0]:
+                        continue  # ALTER уже пробует другой сеанс
+                    # set_config(…, true) — только до конца транзакции (SET LOCAL).
+                    cur.execute(
+                        "SELECT set_config('lock_timeout', %s, true)",
+                        (f"{self.MIGRATION_LOCK_TIMEOUT_MS}ms",),
+                    )
+                    cur.execute(
+                        sql.SQL(
+                            "ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS writer_visibility jsonb"
+                        ).format(tbl=self._tbl)
+                    )
+                return
+            except psycopg.errors.LockNotAvailable:
+                continue
+        raise SchemaMigrationBusy(
+            f"Миграция {self.table}.writer_visibility не получила лок таблицы за "
+            f"{self.MIGRATION_ATTEMPTS} попыток по {self.MIGRATION_LOCK_TIMEOUT_MS} мс: "
+            "таблицу держит долгая транзакция (pg_stat_activity). Повторите позже."
+        )
+
+    @property
+    def migration_lock_name(self) -> str:
+        """Имя advisory-лока миграции таблицы (ключ — ``hashtext`` от него)."""
+        return f"platform_memory:migrate:{self.table}"
+
+    def _has_writer_visibility(self) -> bool:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = %s AND column_name = 'writer_visibility'",
+                (self.table,),
+            )
+            return cur.fetchone() is not None
+
     def _ensure_trgm(self) -> None:
         """Поставить pg_trgm и trigram-индекс, если хватает прав (иначе — без них)."""
         try:
@@ -197,12 +281,16 @@ class ObservationStore:
 
     # --- запись ---
 
-    def insert(self, obs: Observation) -> tuple[str, bool]:
+    def insert(
+        self, obs: Observation, *, writer_scopes: Sequence[str] | None = None
+    ) -> tuple[str, bool]:
         """Идемпотентно вставить наблюдение; вернуть (observation_id, duplicate).
 
         Повтор того же external observation (или того же содержимого без
         external_id) не создаёт дубликат: детерминированный observation_id
         конфликтует по (namespace, observation_id) и вставка пропускается.
+        ``writer_scopes`` — видимость пишущего (None — без ограничения): хранится в
+        записи, по ней redrive решает, что можно перезаписать (MEM-ADR-019).
         """
         ns = resolve_namespace(obs.namespace, self.default_namespace)
         obs.namespace = ns
@@ -212,8 +300,8 @@ class ObservationStore:
                 sql.SQL(
                     "INSERT INTO {tbl} (observation_id, namespace, source_system, source_stream, "
                     "external_id, kind, occurred_at, actor, subject, scopes, content, data, "
-                    "assertions, provenance, content_hash, status) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "assertions, provenance, content_hash, status, writer_visibility) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                     "ON CONFLICT (namespace, observation_id) DO NOTHING"
                 ).format(tbl=self._tbl),
                 (
@@ -233,6 +321,7 @@ class ObservationStore:
                     Jsonb(obs.provenance),
                     obs.content_hash(),
                     STATUS_RECEIVED,
+                    Jsonb({"scopes": list(writer_scopes) if writer_scopes is not None else None}),
                 ),
             )
             duplicate = cur.rowcount == 0
@@ -282,6 +371,7 @@ class ObservationStore:
     # --- чтение ---
 
     def _row_record(self, row: tuple) -> ObservationRecord:
+        writer = row[18] if len(row) > 18 and isinstance(row[18], dict) else None
         return ObservationRecord(
             observation_id=row[0],
             namespace=row[1],
@@ -301,6 +391,7 @@ class ObservationStore:
             content_hash=row[15],
             status=row[16],
             status_detail=row[17],
+            writer_visibility=writer,
         )
 
     def get(self, observation_id: str, namespaces: Sequence[str] = ()) -> ObservationRecord | None:
@@ -429,21 +520,87 @@ class ObservationStore:
     # --- обслуживание ---
 
     def list_unprocessed(
-        self, namespaces: Sequence[str] = (), *, limit: int = 100
+        self,
+        namespaces: Sequence[str] = (),
+        *,
+        limit: int = 100,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> list[ObservationRecord]:
-        """Наблюдения, ждущие (пере)обработки: received / partially_processed / failed."""
+        """Наблюдения, ждущие (пере)обработки: received / partially_processed / failed.
+
+        Несут ``writer_visibility`` — видимость пишущего для redrive. ``allowed_scopes``
+        — только видимые вызывающему (None — все), фильтр в SQL до ``limit``.
+        """
         nss = resolve_namespaces(namespaces, self.default_namespace)
+        clause, params = self._scope_clause([], allowed_scopes)
         with self.conn.cursor() as cur:
             cur.execute(
                 sql.SQL(
-                    "SELECT " + _COLUMNS + " FROM {tbl} "
+                    "SELECT " + _COLUMNS + ", writer_visibility FROM {tbl} "
                     "WHERE namespace = ANY(%s) "
-                    "AND status IN ('received', 'partially_processed', 'failed') "
+                    "AND status IN ('received', 'partially_processed', 'failed')" + clause + " "
                     "ORDER BY ingested_at ASC LIMIT %s"
                 ).format(tbl=self._tbl),
-                (nss, int(limit)),
+                (nss, *params, int(limit)),
             )
             return [self._row_record(r) for r in cur.fetchall()]
+
+    def list_legacy_unprocessed(
+        self,
+        namespaces: Sequence[str] = (),
+        *,
+        observation_ids: Sequence[str] = (),
+        limit: int = 100,
+    ) -> list[ObservationRecord]:
+        """Необработанные наблюдения без сохранённой видимости пишущего (до TASK-001056).
+
+        ``observation_ids`` — только эти (пусто — все такие в namespaces).
+        """
+        nss = resolve_namespaces(namespaces, self.default_namespace)
+        extra, params = ("", [])
+        if observation_ids:
+            extra, params = (" AND observation_id = ANY(%s)", [list(observation_ids)])
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "SELECT " + _COLUMNS + ", writer_visibility FROM {tbl} "
+                    "WHERE namespace = ANY(%s) AND writer_visibility IS NULL "
+                    "AND status IN ('received', 'partially_processed', 'failed')" + extra + " "
+                    "ORDER BY ingested_at ASC LIMIT %s"
+                ).format(tbl=self._tbl),
+                (nss, *params, int(limit)),
+            )
+            return [self._row_record(r) for r in cur.fetchall()]
+
+    def set_legacy_writer_visibility(
+        self,
+        observation_id: str,
+        writer_scopes: Sequence[str] | None,
+        namespace: str = "",
+        *,
+        mark: dict[str, Any] | None = None,
+    ) -> bool:
+        """Записать видимость пишущего в наблюдение, у которого её нет (оператор).
+
+        ``mark`` — поля следа решения рядом со ``scopes`` (кто и когда заявил):
+        заявленная видимость отличима от записанной при приёме. Сохранённую
+        видимость не перезаписывает: только ``writer_visibility IS NULL``.
+        True — запись обновлена.
+        """
+        ns = resolve_namespace(namespace, self.default_namespace)
+        value = {
+            "scopes": list(writer_scopes) if writer_scopes is not None else None,
+            **(mark or {}),
+        }
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    "UPDATE {tbl} SET writer_visibility = %s "
+                    "WHERE namespace = %s AND observation_id = %s AND writer_visibility IS NULL"
+                ).format(tbl=self._tbl),
+                (Jsonb(value), ns, observation_id),
+            )
+            return cur.rowcount > 0
 
     def count(self, namespaces: Sequence[str] = (), *, status: str = "") -> int:
         """Число наблюдений (опционально по статусу)."""
@@ -460,15 +617,20 @@ class ObservationStore:
             )
             return int(cur.fetchone()[0])
 
-    def counts_by_status(self, namespaces: Sequence[str] = ()) -> dict[str, int]:
+    def counts_by_status(
+        self, namespaces: Sequence[str] = (), *, allowed_scopes: Sequence[str] | None = None
+    ) -> dict[str, int]:
         """Свод статусов обработки — для stats/аудита ingestion state."""
         nss = resolve_namespaces(namespaces, self.default_namespace)
+        clause, params = self._scope_clause([], allowed_scopes)
         with self.conn.cursor() as cur:
             cur.execute(
                 sql.SQL(
-                    "SELECT status, count(*) FROM {tbl} WHERE namespace = ANY(%s) GROUP BY status"
+                    "SELECT status, count(*) FROM {tbl} WHERE namespace = ANY(%s)"
+                    + clause
+                    + " GROUP BY status"
                 ).format(tbl=self._tbl),
-                (nss,),
+                (nss, *params),
             )
             return {row[0]: int(row[1]) for row in cur.fetchall()}
 

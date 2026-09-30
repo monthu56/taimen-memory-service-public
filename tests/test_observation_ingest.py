@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 
 from platform_memory.core.config import Settings
 from platform_memory.core.observations import STATUS_FAILED, STATUS_PARTIAL, STATUS_PROCESSED
-from platform_memory.observations.ingest import AssertionProjector, _process_record
+from platform_memory.observations.ingest import (
+    AssertionProjector,
+    _process_record,
+    redrive_scopes,
+)
 from platform_memory.observations.store import ObservationRecord
 
 pytestmark = pytest.mark.unit
@@ -39,8 +45,25 @@ class _FakeFacts:
 class _FakeIndex:
     def __init__(self):
         self.chunks: list = []
+        self.guarded: list[tuple] = []
+        self.locked: str | None = None
+
+    @contextmanager
+    def key_write_lock(self, node_key, namespace=""):
+        self.locked = node_key
+        try:
+            yield
+        finally:
+            self.locked = None
+
+    def guard_chunk_write(self, node_key, namespace="", allowed_scopes=None):
+        # Проверка чанков — только под локом того же ключа (MEM-ADR-019, TOCTOU).
+        assert self.locked == node_key
+        self.guarded.append((node_key, allowed_scopes))
+        return []
 
     def add_chunks(self, chunks, embeddings, seen_run=""):
+        assert all(self.locked == c.node_key for c in chunks)
         self.chunks.extend(chunks)
         return len(chunks)
 
@@ -63,16 +86,17 @@ class _FakeObsStore:
         self.statuses.append((oid, status, detail))
 
 
-def _projector(embedder=_FakeEmbedder()):
+def _projector(embedder=_FakeEmbedder(), **kw):
     graph = _FakeGraph()
     facts = _FakeFacts(graph)
     index = _FakeIndex()
     settings = Settings(_env_file=None)
-    return AssertionProjector(graph, facts, index, embedder, settings), graph, facts, index
+    return AssertionProjector(graph, facts, index, embedder, settings, **kw), graph, facts, index
 
 
-def _record(assertions, scopes=None):
+def _record(assertions, scopes=None, writer=None):
     return ObservationRecord(
+        writer_visibility=writer,
         observation_id="obs-abc",
         namespace="bank",
         kind="work.completed",
@@ -207,3 +231,52 @@ def test_process_record_without_assertions_is_processed():
     projector, _, _, _ = _projector()
     rec = _record([])
     assert _process_record((obs_store, projector), rec) == STATUS_PROCESSED
+
+
+_ALL_KINDS = [
+    {"assert": "entity", "entity": {"type": "person", "id": "alice"}},
+    {"assert": "text", "text": {"content": "Заметка", "key": "note:1"}},
+]
+
+
+def test_projection_passes_writer_visibility():
+    """Видимость пишущего доходит до ensure_entity и проверки чанков (MEM-ADR-019)."""
+    projector, _, facts, index = _projector(allowed_scopes=("workspace:w2",))
+    assert projector.project(_record(_ALL_KINDS)) == []
+    assert [e["allowed_scopes"] for e in facts.entities] == [("workspace:w2",)] * 2
+    assert index.guarded == [("note:1", ("workspace:w2",))]
+
+
+def test_redrive_uses_stored_writer_visibility():
+    """Redrive пишет с видимостью пишущего из записи, а не со scopes наблюдения."""
+    projector, _, facts, index = _projector(allowed_scopes=None, redrive=True)
+    record = _record(_ALL_KINDS, scopes=["workspace:w1"], writer={"scopes": ["workspace:w2"]})
+    assert projector.project(record) == []
+    assert [e["allowed_scopes"] for e in facts.entities] == [["workspace:w2"]] * 2
+    assert index.guarded == [("note:1", ["workspace:w2"])]
+
+
+def test_redrive_of_legacy_record_is_namespace_level():
+    """Запись без сохранённой видимости пишущего: scopes записи не доверяем."""
+    projector, _, facts, index = _projector(allowed_scopes=None, redrive=True)
+    assert projector.project(_record(_ALL_KINDS, scopes=["workspace:w1"])) == []
+    assert [e["allowed_scopes"] for e in facts.entities] == [[]] * 2
+    assert index.guarded == [("note:1", [])]
+
+
+@pytest.mark.parametrize(
+    ("writer", "caller", "expected"),
+    [
+        ({"scopes": None}, None, None),
+        ({"scopes": None}, ["workspace:w1"], ["workspace:w1"]),
+        ({"scopes": ["workspace:w1", "principal:p"]}, None, ["workspace:w1", "principal:p"]),
+        ({"scopes": ["workspace:w1", "principal:p"]}, ["workspace:w1"], ["workspace:w1"]),
+        ({"scopes": ["workspace:w1"]}, ["workspace:w2"], []),
+        (None, None, []),
+        (None, ["workspace:w1"], []),
+        ({"scopes": "workspace:w1"}, None, []),
+    ],
+)
+def test_redrive_scopes(writer, caller, expected):
+    """Видимость redrive — пишущего из записи, суженная запустившим; legacy — []."""
+    assert redrive_scopes(writer, caller) == expected

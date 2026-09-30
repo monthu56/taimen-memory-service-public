@@ -122,6 +122,29 @@ async def resolve_visibility(
     return visible
 
 
+async def resolve_write_visibility(
+    settings: Settings, subject: Any, body: dict[str, Any] | None
+) -> VisibleSet:
+    """Видимость пишущего: чьи существующие объекты он может перезаписать (MEM-ADR-019).
+
+    То же, что :func:`resolve_visibility`, кроме service account'а с
+    ``memory:on-behalf`` без ``allowedNamespaces``/``allowedScopes`` в теле: он пишет
+    от себя (ингест документов и наблюдений ядром), как статический ключ, — без
+    ограничения. С полями в теле — пишет от имени principal и ограничен ими.
+    """
+    if (
+        settings.policy_enabled
+        and subject is not None
+        and subject.has_scope(SCOPE_ON_BEHALF)
+        and not any(
+            k in (body or {})
+            for k in ("allowedNamespaces", "allowed_namespaces", "allowedScopes", "allowed_scopes")
+        )
+    ):
+        return UNRESTRICTED
+    return await resolve_visibility(settings, subject, body)
+
+
 def _from_body(body: dict[str, Any]) -> VisibleSet:
     namespaces = body.get("allowedNamespaces", body.get("allowed_namespaces"))
     scopes = body.get("allowedScopes", body.get("allowed_scopes"))

@@ -7,6 +7,7 @@ test_server_memory_api). Проверяются service scope регистрац
 
 from __future__ import annotations
 
+import contextlib
 import json
 
 import pytest
@@ -60,6 +61,10 @@ class _FakeConn:
     def close(self):
         pass
 
+    @contextlib.contextmanager
+    def transaction(self):
+        yield
+
 
 class _FakeRegistry:
     status = "created"
@@ -102,8 +107,23 @@ class _FakeRegistry:
     def put_settings(self, ns, **_kw):
         return self._Payload()
 
+    class _Catalog(_Payload):
+        def __init__(self, priorities):
+            self.priorities = priorities
+
+        def source_priorities(self):
+            return self.priorities
+
     def catalog_for(self, ns):
-        return self._Payload()
+        return self._Catalog(self.env.setdefault("priorities", {"legal_entity": ("erp:*",)}))
+
+    # Отпечаток sourcePriority последнего пересведения (MEM-ADR-022): по умолчанию — нет.
+    def merged_priorities(self, ns):
+        self.env.setdefault("steps", []).append("read_fp")
+        return self.env.get("merged_fp")
+
+    def mark_merged(self, ns, priorities):
+        self.env["merged_fp"] = {k: list(v) for k, v in priorities.items()}
 
 
 @pytest.fixture
@@ -114,6 +134,7 @@ def env(monkeypatch):
         "typed": [],
         "entities": [],
         "reindexed": [],
+        "merged": [],
         "listed": [],
         "tenant_get": [],
     }
@@ -159,6 +180,19 @@ def env(monkeypatch):
     monkeypatch.setattr(api_mod, "compile_typed_context", fake_typed)
     monkeypatch.setattr(api_mod, "query_entities", fake_entities)
     monkeypatch.setattr(api_mod, "reindex_namespace", fake_reindex)
+
+    def fake_merge(settings, conn, namespace, catalog):
+        if state.get("merge_error"):
+            raise state["merge_error"]
+        state["merged"].append(namespace)
+        return {"nodes": 3}
+
+    monkeypatch.setattr(api_mod, "merge_namespace_nodes", fake_merge)
+    monkeypatch.setattr(
+        api_mod,
+        "lock_reconciles",
+        lambda settings, conn, ns: state.setdefault("steps", []).append(("lock", ns)),
+    )
     state["client"] = TestClient(app_mod.app)
     return state
 
@@ -645,6 +679,14 @@ class TestContractBeforeImplementation:
         assert resp.status_code == 403
 
 
+def _put_kinds(env):
+    return env["client"].put(
+        f"/api/memory/namespaces/{NS}/kinds",
+        json={"strict": False, "packages": ["tracker"]},
+        headers=_h("tenant-secret"),
+    )
+
+
 class TestNamespaceKindsReindex:
     """PUT …/kinds переиндексирует сущности для поиска по смыслу (K005)."""
 
@@ -657,6 +699,52 @@ class TestNamespaceKindsReindex:
         assert resp.status_code == 200
         assert resp.json()["reindex"] == {"indexed": 2, "updated": 0, "removed": 1, "unchanged": 0}
         assert env["reindexed"] == [NS]
+        # MEM-ADR-022: узлы пересводятся по новому sourcePriority.
+        assert resp.json()["merge"] == {"nodes": 3}
+        assert env["merged"] == [NS]
+
+    def test_merge_skipped_when_nodes_merged_by_same_priority(self, env):
+        env["merged_fp"] = {"legal_entity": ["erp:*"]}
+        resp = env["client"].put(
+            f"/api/memory/namespaces/{NS}/kinds",
+            json={"strict": False, "packages": ["tracker"]},
+            headers=_h("tenant-secret"),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["merge"] == {"nodes": 0, "skipped": True}
+        assert env["merged"] == []
+
+    def test_merge_records_fingerprint_and_repeat_is_skipped(self, env):
+        assert _put_kinds(env).json()["merge"] == {"nodes": 3}
+        assert env["merged_fp"] == {"legal_entity": ["erp:*"]}
+        assert _put_kinds(env).json()["merge"] == {"nodes": 0, "skipped": True}
+        assert env["merged"] == [NS]
+
+    def test_fingerprint_read_under_reconcile_lock(self, env):
+        """Отпечаток читается после лока сверок namespace: иначе идущая сверка успеет
+        записать узлы по другому каталогу до сброса отпечатка (MEM-ADR-022, п. 5)."""
+        env["merged_fp"] = {"legal_entity": ["erp:*"]}
+        assert _put_kinds(env).json()["merge"] == {"nodes": 0, "skipped": True}
+        assert env["steps"] == [("lock", NS), "read_fp"]
+
+    def test_repeat_after_merge_error_merges_again(self, env):
+        env["merge_error"] = RuntimeError("БД занята")
+        assert _put_kinds(env).json()["merge"] == {"error": "БД занята"}
+        assert "merged_fp" not in env
+        env["merge_error"] = None
+        assert _put_kinds(env).json()["merge"] == {"nodes": 3}
+        assert env["merged"] == [NS]
+
+    def test_merge_error_keeps_settings(self, env):
+        env["merge_error"] = RuntimeError("БД занята")
+        resp = env["client"].put(
+            f"/api/memory/namespaces/{NS}/kinds",
+            json={"strict": False, "packages": ["tracker"]},
+            headers=_h("tenant-secret"),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["merge"] == {"error": "БД занята"}
+        assert resp.json()["reindex"]["indexed"] == 2
 
     def test_reindex_error_keeps_settings(self, env):
         env["reindex_error"] = RuntimeError("gateway недоступен")

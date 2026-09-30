@@ -59,7 +59,7 @@ def _install(monkeypatch, env: _Env):
             env.graph_calls.append({"op": "list", "namespaces": list(namespaces)})
             return []
 
-        def delete_node(self, natural_key, namespace=""):
+        def delete_node(self, natural_key, namespace="", allowed_scopes=None):
             env.graph_calls.append({"op": "delete", "namespace": namespace})
             return {"type": "article", "title": "t", "namespace": namespace}
 
@@ -67,7 +67,7 @@ def _install(monkeypatch, env: _Env):
             env.graph_calls.append({"op": "audit", "action": action, "namespace": namespace})
             return {"trace_id": trace_id}
 
-        def trace_subgraph(self, trace_id, namespace=""):
+        def trace_subgraph(self, trace_id, namespace="", allowed_scopes=None):
             env.graph_calls.append({"op": "trace", "namespace": namespace})
             return {"trace_id": trace_id, "events": [], "facts": []}
 
@@ -75,7 +75,7 @@ def _install(monkeypatch, env: _Env):
         def __init__(self, conn, table, dim, default_namespace=""):
             pass
 
-        def delete_for_node(self, node_key, namespace=""):
+        def delete_for_node(self, node_key, namespace="", allowed_scopes=None):
             return 1
 
     monkeypatch.setattr(app_mod, "retrieve", fake_retrieve)

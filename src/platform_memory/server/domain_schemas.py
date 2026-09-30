@@ -82,6 +82,14 @@ class KindSpecIn(_Doc):
         default=None,
         description="Индексировать сущности вида для поиска по смыслу (амендмент 2026-09-28).",
     )
+    source_priority: list[str] | None = Field(
+        default=None,
+        alias="sourcePriority",
+        max_length=20,
+        description="Порядок источников снимков (glob по source) для конфликта атрибута "
+        "сущности из нескольких источников: раньше в списке — сильнее; источник вне "
+        "списка — после всех, при равном приоритете — более поздний observedAt (MEM-ADR-022).",
+    )
 
 
 class RelationSpecIn(_Doc):
@@ -369,20 +377,36 @@ class EntitiesQueryIn(_Doc):
     scope: dict[str, Any] | None = None
 
 
+class EntitySource(_Doc):
+    """Источник, из версии которого сведена сущность (MEM-ADR-022)."""
+
+    source: str
+    scope: str
+    snapshot_id: str
+    source_path: str = Field(description="Цитата: путь/ссылка на источник версии.")
+
+
 class EntityItem(_Doc):
-    """Сущность перечня — версия, действующая на as_of."""
+    """Сущность перечня — сведение версий источников, действующих на as_of (MEM-ADR-022)."""
 
     kind: str
     key: str
     namespace: str
     title: str
-    attributes: dict[str, Any]
-    source: str = Field(description="Источник снимка, держащий версию.")
+    attributes: dict[str, Any] = Field(
+        description="Сведённые атрибуты: атрибут одного источника не пропадает от снимка "
+        "другого; конфликт — sourcePriority вида, затем последний писавший атрибут."
+    )
+    source: str = Field(description="Источник старшей из сведённых версий.")
     scope: str = Field(description="Scope источника снимка.")
     snapshot_id: str
-    source_path: str = Field(description="Цитата: путь/ссылка на источник версии.")
+    source_path: str = Field(description="Цитата: путь/ссылка на источник старшей версии.")
     valid_from: str | None = None
     valid_to: str | None = None
+    sources: list[EntitySource] = Field(
+        default_factory=list,
+        description="Все источники, из версий которых сведена сущность, по старшинству.",
+    )
 
 
 class EntitiesQueryResult(_Doc):

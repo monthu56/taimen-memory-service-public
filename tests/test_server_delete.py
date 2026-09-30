@@ -69,10 +69,10 @@ def _install_fakes(monkeypatch, env: _Env) -> TestClient:
         def __init__(self, conn, graph_name, default_namespace=""):
             env.graph_default_ns.append(default_namespace)
 
-        def trace_subgraph(self, trace_id, namespace=""):
+        def trace_subgraph(self, trace_id, namespace="", allowed_scopes=None):
             return {"trace_id": trace_id, "events": [], "facts": []}
 
-        def delete_node(self, natural_key, namespace=""):
+        def delete_node(self, natural_key, namespace="", allowed_scopes=None):
             node = env.nodes.get(natural_key)
             if node is None:
                 return None
@@ -95,7 +95,7 @@ def _install_fakes(monkeypatch, env: _Env) -> TestClient:
         def __init__(self, conn, table, dim, default_namespace=""):
             pass
 
-        def delete_for_node(self, node_key, namespace=""):
+        def delete_for_node(self, node_key, namespace="", allowed_scopes=None):
             env.index_deleted.append(node_key)
             return 3
 

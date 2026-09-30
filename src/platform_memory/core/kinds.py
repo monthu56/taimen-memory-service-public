@@ -27,13 +27,20 @@
 * ``idPatterns`` — регулярные выражения, извлекающие идентификаторы вида из текста
   (именованная группа ``id`` или всё совпадение);
 * ``attributes`` — JSON Schema атрибутов (то же подмножество + object/properties/required);
+  у снимков ``required`` верхнего уровня проверяется у сведения версий всех источников
+  сущности, а не у вклада одного снимка (MEM-ADR-022);
 * ``temporal`` связи — у фактов связи есть интервал валидности (по умолчанию ``true``);
 * ``cardinality`` связи — ``many`` (по умолчанию: у субъекта набор объектов, сверка
   закрывает только пропавшие пары) или ``one`` (у субъекта один объект: смена объекта
   при сверке снимка закрывает старый факт с ``superseded_by`` нового);
 * ``searchable: {"fields": [...]}`` вида — сущности вида индексируются для поиска по
   смыслу (MEM-ADR-020, амендмент 2026-09-28): текст эмбеддинга — ``title`` и значения
-  перечисленных атрибутов (``search_text``). Вид без ``searchable`` не индексируется.
+  перечисленных атрибутов (``search_text``). Вид без ``searchable`` не индексируется;
+* ``sourcePriority`` вида — порядок источников снимков (glob по ``source``, ``*``/``?``):
+  при сведении атрибутов сущности из нескольких источников значение атрибута берётся
+  из источника, совпавшего с более ранним шаблоном (MEM-ADR-022). Источник вне списка —
+  после всех перечисленных; при равном приоритете — источник с более поздним
+  ``observedAt``.
 
 Модуль чистый (БД не нужна): разбор и валидация пакета, каталог видов namespace,
 извлечение идентификаторов. Хранение — ``domain/registry.py``. Пакет по умолчанию
@@ -47,6 +54,7 @@ import json
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -71,6 +79,8 @@ MAX_ID_PATTERNS = 10
 MAX_PATTERN_LEN = 300
 MAX_ALIASES = 20
 MAX_SEARCHABLE_FIELDS = 20
+MAX_SOURCE_PRIORITY = 20
+MAX_SOURCE_PATTERN_LEN = 200
 # Имя атрибута в searchable.fields — как ключ атрибутов сущности.
 ATTR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 CARDINALITIES = ("many", "one")
@@ -268,6 +278,7 @@ class KindSpec:
     attributes: dict[str, Any] | None = None
     pack: str = ""
     searchable: tuple[str, ...] = ()  # атрибуты текста эмбеддинга; пусто — не индексируется
+    source_priority: tuple[str, ...] = ()  # glob-шаблоны source по убыванию приоритета
 
     @property
     def key_template(self) -> KeyTemplate | None:
@@ -346,6 +357,14 @@ class KindSpec:
                 lines.append(f"{name}: {value}")
         return "\n".join(line for line in lines if line)
 
+    def source_rank(self, source: str) -> int:
+        """Ранг источника при сведении атрибутов: номер первого совпавшего шаблона
+        ``sourcePriority`` (меньше — сильнее); вне списка — после всех шаблонов."""
+        for i, pattern in enumerate(self.source_priority):
+            if fnmatchcase(source, pattern):
+                return i
+        return len(self.source_priority)
+
     def to_payload(self) -> dict[str, Any]:
         out: dict[str, Any] = {"kind": self.kind}
         if self.natural_key is not None:
@@ -361,6 +380,8 @@ class KindSpec:
         # Только если задано: каноническая форма пакетов без поля не меняется.
         if self.searchable:
             out["searchable"] = {"fields": list(self.searchable)}
+        if self.source_priority:
+            out["sourcePriority"] = list(self.source_priority)
         return out
 
 
@@ -474,6 +495,19 @@ def _parse_searchable(raw: Any, attrs: dict[str, Any] | None, where: str) -> tup
     return tuple(fields)
 
 
+def _parse_source_priority(raw: Any, where: str) -> tuple[str, ...]:
+    """``sourcePriority``: до 20 уникальных glob-шаблонов ``source`` снимка."""
+    patterns = _str_list(raw, f"{where}.sourcePriority", limit=MAX_SOURCE_PRIORITY)
+    for pattern in patterns:
+        if len(pattern) > MAX_SOURCE_PATTERN_LEN:
+            raise PackError(
+                f"{where}.sourcePriority: шаблон длиннее {MAX_SOURCE_PATTERN_LEN} символов"
+            )
+    if len(set(patterns)) != len(patterns):
+        raise PackError(f"{where}.sourcePriority: шаблоны повторяются")
+    return tuple(patterns)
+
+
 def _str_list(raw: Any, where: str, *, limit: int) -> list[str]:
     if raw is None:
         return []
@@ -572,6 +606,9 @@ def parse_pack(payload: dict[str, Any]) -> DomainPack:
                 attributes=attrs,
                 pack=name,
                 searchable=_parse_searchable(raw.get("searchable"), attrs, where),
+                source_priority=_parse_source_priority(
+                    raw.get("sourcePriority", raw.get("source_priority")), where
+                ),
             )
         )
 
@@ -739,12 +776,15 @@ class KindCatalog:
         *,
         natural_key: str = "",
         attributes: dict[str, Any] | None = None,
+        partial: bool = False,
     ) -> str:
         """Проверить вид сущности; вернуть каноническое имя.
 
         Нестрогий режим — прежнее поведение: любой вид допустим, псевдоним
         приводится к каноническому имени. Строгий режим — неизвестный вид
         отвергается (``UnknownKindError``), ключ и атрибуты проверяются по схемам вида.
+        ``partial`` — атрибуты — вклад одного источника снимка: ``required`` верхнего
+        уровня не проверяется (его проверяет сверка у сведения, MEM-ADR-022).
         """
         canon = self.canonical(kind or "entity") or "entity"
         if not self.strict:
@@ -761,7 +801,10 @@ class KindCatalog:
         if natural_key:
             errors.extend(spec.key_errors(natural_key))
         if spec.attributes is not None and attributes is not None:
-            errors.extend(schema_errors(attributes, spec.attributes, "attributes"))
+            schema = spec.attributes
+            if partial and isinstance(schema, dict):
+                schema = {k: v for k, v in schema.items() if k != "required"}
+            errors.extend(schema_errors(attributes, schema, "attributes"))
         if errors:
             raise AttributesError(f"Сущность вида {canon!r}: " + "; ".join(errors[:10]))
         return canon
@@ -784,6 +827,26 @@ class KindCatalog:
             if spec.matches_id(token):
                 return name
         return None
+
+    def source_priorities(self) -> dict[str, tuple[str, ...]]:
+        """``sourcePriority`` видов каталога (виды без него не входят)."""
+        return {n: spec.source_priority for n, spec in self.kinds.items() if spec.source_priority}
+
+    def required_attributes(self, kind: str) -> tuple[str, ...]:
+        """Обязательные атрибуты вида (``required`` верхнего уровня схемы ``attributes``).
+
+        Только строгий режим: нестрогий схемы атрибутов не проверяет.
+        """
+        spec = self.kinds.get(kind) if self.strict else None
+        schema = spec.attributes if spec is not None else None
+        required = schema.get("required") if isinstance(schema, dict) else None
+        return tuple(str(n) for n in required) if isinstance(required, list) else ()
+
+    def source_rank(self, kind: str, source: str) -> int:
+        """Ранг источника для атрибутов сущности вида (``KindSpec.source_rank``); вид без
+        ``sourcePriority`` или неизвестный — у всех источников равный ранг."""
+        spec = self.spec(kind)
+        return spec.source_rank(source) if spec is not None else 0
 
     def searchable_kinds(self) -> dict[str, KindSpec]:
         """Виды каталога с ``searchable`` (индексируемые для поиска по смыслу)."""

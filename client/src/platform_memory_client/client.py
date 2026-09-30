@@ -450,7 +450,11 @@ class MemoryClient:
         run_id: str | None = None,
         namespace: str | None = None,
     ) -> RetainResult:
-        """Idempotently write a fact/decision back to the graph + index."""
+        """Idempotently write a fact/decision back to the graph + index.
+
+        A key held by an object outside the caller's visibility is not overwritten:
+        :class:`MemoryServiceError` 403 (MEM-ADR-019); existing scopes are kept.
+        """
         body = _retain_spec(
             content,
             type,
@@ -508,7 +512,9 @@ class MemoryClient:
         """Batch-ingest a document: one graph node + pre-chunked text (embeds server-side).
 
         Idempotent by ``natural_key``; ``replace=True`` swaps the node's chunks,
-        continuation calls for large documents pass ``replace=False``.
+        continuation calls for large documents pass ``replace=False``. A key held by a
+        node or chunks outside the caller's visibility: :class:`MemoryServiceError` 403,
+        nothing written (MEM-ADR-019).
         """
         body = _document_spec(
             natural_key,
@@ -610,7 +616,11 @@ class MemoryClient:
     def observe(
         self, observation: Mapping[str, Any], *, namespace: str | None = None
     ) -> ObservationResult:
-        """Retain one observation (idempotent by its source identity)."""
+        """Retain one observation (idempotent by its source identity).
+
+        A visibility scope (``workspace:``/``principal:``) outside the caller's own
+        visibility: :class:`MemoryServiceError` 403, nothing stored (MEM-ADR-019).
+        """
         body = _compact({**observation, "scope": _write_scope(namespace)})
         return ObservationResult.model_validate(self._post("/api/memory/observations", body))
 
@@ -704,7 +714,8 @@ class MemoryClient:
         """Turn strict mode on/off and pin the packages of a namespace.
 
         Entities of kinds with ``searchable`` are reindexed for semantic search
-        (``reindex`` in the result)."""
+        (``reindex`` in the result); entity nodes are re-merged from their snapshot
+        sources by the new ``sourcePriority`` (``merge``)."""
         body = {"strict": strict, "packages": list(packages) if packages is not None else None}
         return NamespaceKinds.model_validate(
             self._send("PUT", f"/api/memory/namespaces/{namespace}/kinds", json=body)
@@ -722,7 +733,9 @@ class MemoryClient:
         """Reconcile a full source snapshot document as is (the pack's SNAPSHOT.md format:
         ``pack, source, scope, snapshotId, observedAt, entities, relations``).
 
-        Idempotent by ``(namespace, source, scope, snapshotId)``. ``scopes`` are
+        A repeat of the last accepted ``snapshotId`` of ``(namespace, source, scope)``
+        is a ``duplicate``; an earlier ``snapshotId`` coming back after another
+        (A → B → A) is applied as a new snapshot. ``scopes`` are
         visibility scopes (MEM-ADR-019) written onto the snapshot's nodes and edges.
         ``dry_run`` builds the plan without writing; ``expected_state`` (the plan's
         ``state_token``) applies only if the ``(source, scope)`` state did not change

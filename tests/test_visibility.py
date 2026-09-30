@@ -24,6 +24,11 @@ from platform_memory.core.namespaces import (
 from platform_memory.core.scopes import (
     chunk_visibility_sql,
     is_visible,
+    ForeignObjectError,
+    check_write_scopes,
+    meta_scopes,
+    merge_scopes,
+    meta_with_scopes,
     observation_visibility_sql,
 )
 from platform_memory.index.store import SearchHit
@@ -167,6 +172,59 @@ def test_visible_set_on_behalf_requires_body_sets():
         )
     )
     assert visible.namespaces == frozenset({NS_A}) and visible.scopes == ("workspace:w1",)
+
+
+def test_write_visibility_on_behalf_without_sets_writes_as_itself():
+    """On-behalf SA без allowed* пишет от себя (ингест ядра) — без ограничения."""
+    subject = _subject(scopes=("memory:write", "memory:on-behalf"))
+    body = {"natural_key": "doc:1"}
+    assert (
+        asyncio.run(vis_mod.resolve_write_visibility(_settings(), subject, body))
+        == vis_mod.UNRESTRICTED
+    )
+    visible = asyncio.run(
+        vis_mod.resolve_write_visibility(
+            _settings(), subject, {"allowedNamespaces": [NS_A], "allowedScopes": ["workspace:w1"]}
+        )
+    )
+    assert visible.scopes == ("workspace:w1",)
+
+
+def test_write_visibility_human_is_policy(monkeypatch):
+    policy = _FakePolicy([f"ws-{WS_A}"], [WS_A])
+    monkeypatch.setattr(vis_mod, "policy_client_factory", lambda _s: policy)
+    visible = asyncio.run(vis_mod.resolve_write_visibility(_settings(), _subject(), {}))
+    assert visible.scopes == (f"workspace:{WS_A}", f"principal:{ALICE}")
+
+
+# --- слияние scopes на перезаписи (MEM-ADR-019) -----------------------------------
+
+
+def test_merge_scopes_new_object_takes_incoming():
+    assert merge_scopes(None, ["workspace:w2", "task:t"]) == ["workspace:w2", "task:t"]
+    assert merge_scopes(None, []) == []
+
+
+def test_merge_scopes_never_erases_visibility():
+    assert merge_scopes(["workspace:w1"], []) == ["workspace:w1"]
+    assert merge_scopes(["workspace:w1", "task:a"], ["task:b"]) == ["workspace:w1", "task:b"]
+    # общая сущность двух воркспейсов видна обоим
+    assert merge_scopes(["workspace:w1"], ["workspace:w2"]) == ["workspace:w1", "workspace:w2"]
+
+
+def test_merge_scopes_namespace_level_object_stays_shared():
+    """Scope видимости записи не приватизирует общий объект уровня namespace."""
+    assert merge_scopes([], ["workspace:w2"]) == []
+    assert merge_scopes(["task:a"], ["workspace:w2", "task:b"]) == ["task:b"]
+    assert merge_scopes(["task:a"], []) == ["task:a"]
+
+
+def test_meta_with_scopes_unions_and_keeps_meta():
+    assert meta_with_scopes({"collection": "x"}) == {"collection": "x"}
+    assert meta_with_scopes(
+        {"scopes": ["workspace:w1"], "k": 1}, ["workspace:w1", "task:t"], []
+    ) == {"scopes": ["workspace:w1", "task:t"], "k": 1}
+    assert meta_with_scopes(None, [], ["workspace:w2"]) == {"scopes": ["workspace:w2"]}
 
 
 # --- клиентское сужение (MEM-ADR-021) --------------------------------------------
@@ -390,3 +448,116 @@ def test_http_on_behalf_service_account(monkeypatch):
     assert ok.status_code == 200, ok.text
     assert env.context_payloads[-1]["allowed_scopes"] == [f"workspace:{WS_A}"]
     assert "allowedNamespaces" not in env.context_payloads[-1]
+
+
+# --- HTTP: чтение узлов по ключу и структурный поиск ------------------------------
+
+
+def _node(key: str, scopes: list[str] | None = None) -> dict:
+    props = {"scopes": scopes} if scopes is not None else {}
+    return {"natural_key": key, "type": "note", "title": key, "namespace": NS_A, "props": props}
+
+
+_NODES = {
+    "w-a": _node("w-a", [f"workspace:{WS_A}"]),
+    "w-b": _node("w-b", [f"workspace:{WS_B}", "task:t1"]),
+    "public": _node("public"),
+}
+
+
+class _FakeConn:
+    def close(self):
+        pass
+
+
+class _FakeGraph:
+    def __init__(self, *_a, **_kw):
+        pass
+
+    def get_node(self, natural_key, namespaces=()):
+        return _NODES.get(natural_key)
+
+    def expand_neighbors(self, natural_keys, hops=1, namespaces=()):
+        return [n for k, n in _NODES.items() if k not in natural_keys]
+
+    def list_nodes(self, *, type=None, status=None, limit=50, namespaces=()):
+        return list(_NODES.values())[:limit]
+
+
+def _install_graph(monkeypatch) -> tuple[TestClient, dict]:
+    key = SigningKey.generate()
+    client = _install(monkeypatch, _Env(), key, _FakePolicy([f"ws-{WS_A}"], [WS_A]))
+    monkeypatch.setattr(app_mod.dbmod, "connect", lambda _s: _FakeConn())
+    monkeypatch.setattr(app_mod, "GraphStore", _FakeGraph)
+    headers = {"Authorization": f"Bearer {_token(key, scopes=('memory:read',))}"}
+    return client, headers
+
+
+def test_http_node_by_key_applies_visibility(monkeypatch):
+    client, headers = _install_graph(monkeypatch)
+    params = {"namespace": NS_A}
+
+    own = client.get("/api/brain/nodes/w-a", params=params, headers=headers)
+    assert own.status_code == 200, own.text
+    # Невидимый сосед не протекает через выдачу соседей.
+    assert {n["natural_key"] for n in own.json()["neighbors"]} == {"public"}
+
+    public = client.get("/api/brain/nodes/public", params=params, headers=headers)
+    assert public.status_code == 200, public.text
+
+    # Чужой workspace — 404, неотличимо от отсутствующего узла.
+    hidden = client.get("/api/brain/nodes/w-b", params=params, headers=headers)
+    missing = client.get("/api/brain/nodes/nope", params=params, headers=headers)
+    assert hidden.status_code == missing.status_code == 404
+    assert hidden.json()["detail"] == "Узел не найден: w-b"
+
+    # Namespace вне видимости — 403, как у списка узлов.
+    foreign = client.get("/api/brain/nodes/w-a", params={"namespace": NS_B}, headers=headers)
+    assert foreign.status_code == 403
+
+    # Статический ключ — service-режим без ограничений.
+    legacy = client.get(
+        "/api/brain/nodes/w-b", params=params, headers={"Authorization": "Bearer legacy-secret"}
+    )
+    assert legacy.status_code == 200, legacy.text
+
+
+def test_http_structural_search_applies_visibility(monkeypatch):
+    client, headers = _install_graph(monkeypatch)
+    body = {"query": "", "filters": {"type": "note"}, "scope": {"namespaces": [NS_A]}}
+
+    resp = client.post("/api/brain/search", json=body, headers=headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["mode"] == "structural"
+    assert {r["natural_key"] for r in data["results"]} == {"w-a", "public"}
+    assert data["count"] == 2
+
+    # Клиентское сужение до чужого scope оставляет только общую память (MEM-ADR-021).
+    narrowed = client.post(
+        "/api/brain/search", json={**body, "allowedScopes": ["workspace:other"]}, headers=headers
+    )
+    assert {r["natural_key"] for r in narrowed.json()["results"]} == {"public"}
+
+    legacy = client.post(
+        "/api/brain/search", json=body, headers={"Authorization": "Bearer legacy-secret"}
+    )
+    assert legacy.json()["count"] == 3
+
+
+def test_check_write_scopes_only_own_visibility():
+    """Scope видимости записи — только из видимости пишущего; релевантность — любая."""
+    check_write_scopes(["workspace:w1", "task:t"], None)
+    check_write_scopes(["workspace:w1", "task:t"], ["workspace:w1"])
+    check_write_scopes(["task:t", "run:r"], [])
+    with pytest.raises(ForeignObjectError, match="workspace:w2"):
+        check_write_scopes(["workspace:w1", "workspace:w2"], ["workspace:w1"])
+    with pytest.raises(ForeignObjectError):
+        check_write_scopes(["principal:p"], [])
+
+
+def test_meta_scopes_accepts_list_or_string():
+    assert meta_scopes(None) == []
+    assert meta_scopes({"scopes": ["workspace:w1"]}) == ["workspace:w1"]
+    assert meta_scopes({"scopes": "workspace:w1"}) == ["workspace:w1"]
+    assert meta_scopes({"scopes": 1}) == []

@@ -393,6 +393,126 @@ def consolidate(
     )
 
 
+@app.command()
+def merge_entities(
+    namespace: str = typer.Option(
+        "", "--namespace", help="KB (пусто — все namespaces журнала снимков)."
+    ),
+) -> None:
+    """Пересвести узлы сущностей из версий всех источников снимков (MEM-ADR-022).
+
+    Миграция узлов, записанных до сведения атрибутов по источникам; идемпотентна.
+    """
+    from platform_memory.core.namespaces import resolve_namespace
+    from platform_memory.domain.reconcile import ledger_for, merge_namespace_nodes
+    from platform_memory.domain.registry import open_registry
+
+    settings = get_settings()
+    try:
+        conn = dbmod.connect(settings)
+    except Exception as exc:  # noqa: BLE001
+        _err(f"Не удалось подключиться к БД: {exc}")
+        raise typer.Exit(1) from exc
+    try:
+        ledger = ledger_for(settings, conn)
+        if not ledger.table_exists():
+            typer.secho("OK: журнала снимков нет — сводить нечего.", fg=typer.colors.GREEN)
+            return
+        registry = open_registry(conn, settings)
+        # Колонка отпечатка — до транзакций сведения (DDL в них держал бы лок таблицы).
+        registry.ensure_schema()
+        nss = (
+            [resolve_namespace(namespace, settings.default_namespace)]
+            if namespace
+            else ledger.namespaces()
+        )
+        for ns in nss:
+            catalog = registry.catalog_for(ns)
+            with conn.transaction():
+                report = merge_namespace_nodes(settings, conn, ns, catalog)
+                # Отпечаток для PUT …/kinds: узлы сведены по этому sourcePriority.
+                registry.mark_merged(ns, catalog.source_priorities())
+            typer.secho(f"OK: {ns}: узлов пересведено {report['nodes']}", fg=typer.colors.GREEN)
+    except Exception as exc:  # noqa: BLE001
+        _err(f"Ошибка merge-entities: {exc}")
+        raise typer.Exit(1) from exc
+    finally:
+        conn.close()
+
+
+@app.command("redrive-legacy")
+def redrive_legacy(
+    writer_scope: list[str] = typer.Option(
+        [], "--writer-scope", help="Scope видимости пишущего 'type:id' (повторяемо)."
+    ),
+    unrestricted: bool = typer.Option(
+        False, "--unrestricted", help="Пишущий без ограничения видимости (service-режим)."
+    ),
+    namespace_level: bool = typer.Option(
+        False, "--namespace-level", help="Пишущий без воркспейсов (только уровень namespace)."
+    ),
+    observation_id: list[str] = typer.Option(
+        [], "--observation-id", help="Только эти наблюдения (повторяемо; пусто — все)."
+    ),
+    namespace: str = typer.Option("", "--namespace", help="KB (пусто — дефолтная)."),
+    limit: int = typer.Option(500, "--limit", help="Максимум наблюдений за прогон."),
+    actor: str = typer.Option(
+        "operator", "--actor", help="Кто заявляет видимость — в метку записи и аудит."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Только показать записи и их source.system, ничего не писать."
+    ),
+) -> None:
+    """Переобработать наблюдения до TASK-001056 с явно указанной видимостью пишущего.
+
+    Ровно одно из: --writer-scope …, --unrestricted, --namespace-level (MEM-ADR-019).
+    Сначала --dry-run: сверьте source.system записей — заявление видимости
+    переигрывает запись от имени заявленного пишущего.
+    """
+    from platform_memory.observations.ingest import redrive_legacy_observations
+
+    chosen = sum([bool(writer_scope), unrestricted, namespace_level])
+    if chosen != 1:
+        _err("Укажите видимость пишущего: --writer-scope …, --unrestricted или --namespace-level")
+        raise typer.Exit(2)
+    scopes: list[str] | None = None if unrestricted else list(writer_scope)
+    settings = get_settings()
+    try:
+        report = redrive_legacy_observations(
+            settings,
+            writer_scopes=scopes,
+            namespace=namespace,
+            observation_ids=observation_id,
+            limit=limit,
+            actor=actor,
+            dry_run=dry_run,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _err(f"Ошибка redrive-legacy: {exc}")
+        raise typer.Exit(1) from exc
+    for item in report["candidates"]:
+        src = item["source"]
+        typer.echo(
+            f"  {item['observation_id']}  source {src['system'] or '-'}/{src['stream'] or '-'}"
+            f"/{src['external_id'] or '-'}  scopes {item['scopes']}"
+        )
+    if dry_run:
+        typer.secho(
+            f"DRY-RUN: подходят {len(report['candidates'])}, ничего не записано",
+            fg=typer.colors.CYAN,
+        )
+    else:
+        typer.secho(
+            f"OK: видимость записана {report['stamped']}, статусы {report['statuses']}",
+            fg=typer.colors.GREEN,
+        )
+    for item in report["skipped"]:
+        typer.secho(
+            f"  пропущено {item['observation_id']}: {item['scope']} вне указанной видимости",
+            fg=typer.colors.YELLOW,
+        )
+
+
 def main() -> None:
     """Точка входа CLI: запустить Typer-приложение."""
     app()

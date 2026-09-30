@@ -24,7 +24,7 @@ class _Ledger:
         self.rows = sorted(rows, key=lambda r: (r["kind"], r["key"], r["namespace"]))
         self.calls = 0
 
-    def entity_page(self, namespaces, kinds, *, as_of, allowed_scopes, after, limit):
+    def entity_page(self, namespaces, kinds, *, as_of, allowed_scopes, after, limit, rank=None):
         self.calls += 1
         out = [
             r

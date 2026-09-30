@@ -49,10 +49,12 @@ class _FakeObsStore:
     def get(self, oid, namespaces=()):
         return self.env.records.get(oid)
 
-    def list_recent(self, namespaces=(), *, scopes=(), kinds=(), status="", limit=50):
+    def list_recent(
+        self, namespaces=(), *, scopes=(), kinds=(), status="", limit=50, allowed_scopes=None
+    ):
         return list(self.env.records.values())[:limit]
 
-    def counts_by_status(self, namespaces=()):
+    def counts_by_status(self, namespaces=(), *, allowed_scopes=None):
         return {"processed": len(self.env.records)}
 
 
@@ -130,7 +132,9 @@ def _install(monkeypatch, env: _Env, **settings_overrides) -> TestClient:
             trace_id="ctx-abc",
         )
 
-    def fake_delete(s, oid, *, namespace="", mode="redact", actor="api", trace_id=""):
+    def fake_delete(
+        s, oid, *, namespace="", mode="redact", actor="api", trace_id="", allowed_scopes=None
+    ):
         if oid not in env.records:
             return None
         env.deleted.append((oid, mode, namespace))
@@ -318,6 +322,27 @@ def test_consolidate_endpoint(monkeypatch):
     resp = client.post("/api/memory/consolidate")
     assert resp.status_code == 200
     assert resp.json()["processed"] == 0
+
+
+def test_schema_migration_busy_is_503(monkeypatch):
+    """Миграция таблицы наблюдений не дождалась лока — ``503`` с ``Retry-After``."""
+    from platform_memory.observations.store import SchemaMigrationBusy
+
+    client = _install(monkeypatch, _Env())
+
+    def busy(*_a, **_kw):
+        raise SchemaMigrationBusy("Миграция obs.writer_visibility не получила лок")
+
+    monkeypatch.setattr(api_mod, "retain_observation", busy)
+    monkeypatch.setattr(api_mod, "consolidate", busy)
+    for path, body in (
+        ("/api/memory/observations", {"kind": "note", "content": "x"}),
+        ("/api/memory/consolidate", None),
+    ):
+        resp = client.post(path, json=body)
+        assert resp.status_code == 503, resp.text
+        assert resp.headers["retry-after"] == "5"
+        assert "writer_visibility" in resp.json()["detail"]
 
 
 def test_brain_routes_untouched(monkeypatch):

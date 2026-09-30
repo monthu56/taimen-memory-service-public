@@ -93,10 +93,14 @@ def test_tenant_packages_contract() -> None:
 def test_namespace_kinds_contract() -> None:
     captured: list[httpx.Request] = []
     reindex = {"indexed": 2, "updated": 0, "removed": 0, "unchanged": 0}
-    client = _sync(captured, {"settings": {"strict": True}, "catalog": {}, "reindex": reindex})
+    client = _sync(
+        captured,
+        {"settings": {"strict": True}, "catalog": {}, "reindex": reindex, "merge": {"nodes": 3}},
+    )
     out = client.set_namespace_kinds("tenant:t1", strict=True, packages=["tracker@1"])
     assert isinstance(out, NamespaceKinds) and out.settings["strict"] is True
     assert out.reindex == reindex
+    assert out.merge == {"nodes": 3}
     assert captured[0].method == "PUT"
     assert captured[0].url.path == "/api/memory/namespaces/tenant:t1/kinds"
     assert json.loads(captured[0].content) == {"strict": True, "packages": ["tracker@1"]}
@@ -295,6 +299,20 @@ def test_query_entities_contract() -> None:
                     "source": "erp:main",
                     "scope": "",
                     "source_path": "snapshot:erp:main/s1",
+                    "sources": [
+                        {
+                            "source": "erp:main",
+                            "scope": "",
+                            "snapshot_id": "s1",
+                            "source_path": "snapshot:erp:main/s1",
+                        },
+                        {
+                            "source": "crm:main",
+                            "scope": "",
+                            "snapshot_id": "c1",
+                            "source_path": "snapshot:crm:main/c1",
+                        },
+                    ],
                 }
             ],
             "nextCursor": "c2",
@@ -312,6 +330,8 @@ def test_query_entities_contract() -> None:
     )
     assert isinstance(page, EntitiesPage) and page.next_cursor == "c2"
     assert page.items[0].key == "lic:1" and page.items[0].attributes["validUntil"]
+    # MEM-ADR-022: сущность сведена из версий нескольких источников.
+    assert [s.source for s in page.items[0].sources] == ["erp:main", "crm:main"]
     assert captured[0].url.path == "/api/memory/entities:query"
     assert json.loads(captured[0].content) == {
         "kinds": ["license"],

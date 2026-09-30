@@ -31,6 +31,11 @@ resolve_candidates» и «пакетное разрешение якорей»):
 больше ``MAX_RESOLVED`` (суффиксом — не больше ``MAX_PER_SUFFIX`` на кандидата). Лимит
 раздаётся в два прохода: сначала точные совпадения (шаги 1–3) всех кандидатов, затем
 суффиксные на остаток — неоднозначные имена не вытесняют точные ключи.
+
+Сущность, которую держат несколько источников, разрешается в сведение их версий
+(MEM-ADR-022, ``domain/merge.py``), а не в самую позднюю: ``rank`` — приоритет
+источников по ``sourcePriority`` видов. Разрешённой не по точному ключу сущности
+дочитываются все её версии — псевдоним или суффикс мог найтись не у каждого источника.
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from typing import Any, Protocol
 
 from platform_memory.core.identifiers import extract_identifiers
 from platform_memory.core.kinds import KindCatalog
+from platform_memory.domain.merge import SourceRank, merge_by_entity
 
 MAX_CANDIDATES = 40
 MAX_RESOLVED = 20
@@ -172,14 +178,11 @@ def _kind_names(catalogs: Sequence[KindCatalog], kind: str) -> set[str] | None:
     return names
 
 
-def _latest(rows: Iterable[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
-    """Одна версия на сущность (namespace, вид, ключ): последняя по id журнала."""
-    out: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for row in rows:
-        ident = (row["namespace"], row["kind"], row["key"])
-        if ident not in out or row["id"] > out[ident]["id"]:
-            out[ident] = row
-    return out
+def _merged(
+    rows: Iterable[dict[str, Any]], rank: SourceRank | None
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """Одна строка на сущность (namespace, вид, ключ): сведение её версий (MEM-ADR-022)."""
+    return merge_by_entity(rows, rank)
 
 
 KindNames = Callable[[str, str | None], set[str] | None]
@@ -207,6 +210,7 @@ def match_candidates(
     limit: int = MAX_RESOLVED * 10,
     per_suffix: int = MAX_PER_SUFFIX,
     per_namespace: bool = False,
+    rank: SourceRank | None = None,
 ) -> dict[tuple[int, str | None], Match]:
     """Совпадения кандидатов в журнале — не больше трёх запросов на всех кандидатов.
 
@@ -216,7 +220,8 @@ def match_candidates(
     ``None``: шаги разрешения идут до первого успешного по всем namespaces сразу (канал
     resolve). ``per_namespace=True`` — отдельно в каждом namespace, и лимит суффикса —
     на namespace (typed-контекст: якорь разрешается в каждой базе независимо).
-    ``kind_names(вид, namespace)`` — допустимые виды строк (None — любой).
+    ``kind_names(вид, namespace)`` — допустимые виды строк (None — любой). Строка
+    совпадения — сведение версий сущности (``rank`` — приоритет источников).
     """
     out: dict[tuple[int, str | None], Match] = {}
     if not candidates or not namespaces:
@@ -224,8 +229,8 @@ def match_candidates(
     groups: list[str | None] = list(namespaces) if per_namespace else [None]
     forms = list(dict.fromkeys(f for c in candidates for f in c.forms))
     kw = {"as_of": as_of, "allowed_scopes": allowed_scopes}
-    by_key = _latest(lookup.entities_by_keys(namespaces, forms, limit=limit, **kw))
-    by_alias = _latest(lookup.entities_by_aliases(namespaces, forms, limit=limit, **kw))
+    by_key = _merged(lookup.entities_by_keys(namespaces, forms, limit=limit, **kw), rank)
+    by_alias = _merged(lookup.entities_by_aliases(namespaces, forms, limit=limit, **kw), rank)
 
     def _match(form: str, ns: str | None) -> tuple[list[dict[str, Any]], str]:
         rows = [
@@ -304,7 +309,7 @@ def match_candidates(
             seen.setdefault((idx, unit[1]), set()).add(ident)
         for unit, hits in per_unit.items():
             i, group = unit
-            latest = _latest(r for r, _, _ in hits)
+            latest = _merged((r for r, _, _ in hits), rank)
             form_of = {(r["namespace"], r["kind"], r["key"]): f for r, _, f in hits}
             chosen = [(latest[k], "suffix", form_of[k]) for k in sorted(latest)]
             # Усечено — какому-то суффиксу подошло больше ``per_suffix`` разных
@@ -329,11 +334,13 @@ def resolve_candidates(
     allowed_scopes: Sequence[str] | None = None,
     max_resolved: int = MAX_RESOLVED,
     per_suffix: int = MAX_PER_SUFFIX,
+    rank: SourceRank | None = None,
 ) -> tuple[list[Resolved], list[dict[str, Any]]]:
     """Разрешить кандидатов в сущности; вернуть (разрешённые, отчёт по кандидатам).
 
-    Не больше трёх запросов к журналу (``match_candidates``). ``truncated`` в отчёте
-    кандидата — исчерпан ``max_resolved``.
+    Не больше трёх запросов к журналу (``match_candidates``) и ещё одного — за всеми
+    версиями сущностей, разрешённых не по точному ключу. ``truncated`` в отчёте
+    кандидата — исчерпан ``max_resolved``. ``rank`` — приоритет источников сведения.
     """
     if not candidates or not namespaces:
         return [], []
@@ -346,6 +353,7 @@ def resolve_candidates(
         allowed_scopes=allowed_scopes,
         limit=max_resolved * 10,
         per_suffix=per_suffix,
+        rank=rank,
     )
     matches = [(cand, found[(i, None)]) for i, cand in enumerate(candidates)]
 
@@ -391,7 +399,34 @@ def resolve_candidates(
                         "method": method,
                     }
                 )
+    _complete(lookup, resolved, rank, as_of=as_of, allowed_scopes=allowed_scopes)
     return resolved, report
+
+
+def _complete(
+    lookup: EntityLookup,
+    resolved: list[Resolved],
+    rank: SourceRank | None,
+    *,
+    as_of: str,
+    allowed_scopes: Sequence[str] | None,
+) -> None:
+    """Дочитать все версии сущностей, разрешённых не по ключу, и пересвести их строки."""
+    partial = [r for r in resolved if r.method != "natural_key"]
+    if not partial:
+        return
+    rows = lookup.entities_by_keys(
+        sorted({r.namespace for r in partial}),
+        sorted({r.key for r in partial}),
+        as_of=as_of,
+        allowed_scopes=allowed_scopes,
+        limit=MAX_RESOLVED * 10 * len(partial),
+    )
+    full = _merged(rows, rank)
+    for r in partial:
+        row = full.get((r.namespace, r.kind, r.key))
+        if row is not None:
+            r.row = row
 
 
 def entity_text(resolved: Resolved) -> tuple[str, str]:

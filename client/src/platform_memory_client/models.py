@@ -143,6 +143,9 @@ class ObservationResult(_Forward):
 
     id: str | None = None
     deduplicated: bool = False
+    # Assertions whose content landed in a node shared by the whole namespace
+    # rather than one scoped like the observation (MEM-ADR-019).
+    warnings: list[str] = []
 
 
 class ObservationBatchResult(_Forward):
@@ -171,12 +174,16 @@ class NamespaceKinds(_Forward):
 
     ``reindex`` (PUT only) — the entity search index rebuilt for the new catalog (kinds
     with ``searchable``): ``{indexed, updated, removed, unchanged}`` or ``{error}``; an
-    error keeps the settings, a repeated PUT finishes the reindex.
+    error keeps the settings, a repeated PUT finishes the reindex. ``merge`` (PUT only) —
+    entity nodes re-merged from all snapshot sources by the new ``sourcePriority``
+    (MEM-ADR-022): ``{nodes}``, ``{nodes: 0, skipped: true}`` when the nodes are already
+    merged by the same ``sourcePriority``, or ``{error}`` (a repeated PUT re-merges).
     """
 
     settings: dict[str, Any] = {}
     catalog: dict[str, Any] = {}
     reindex: dict[str, Any] | None = None
+    merge: dict[str, Any] | None = None
 
 
 class ReconcileChanges(_Forward):
@@ -252,8 +259,20 @@ class TypedContextPack(_Forward):
     trace_id: str | None = None
 
 
+class EntitySource(_Forward):
+    """A snapshot source whose version an entity is merged from (MEM-ADR-022)."""
+
+    source: str | None = None
+    scope: str | None = None
+    snapshot_id: str | None = None
+    source_path: str | None = None
+
+
 class EntityItem(_Forward):
-    """An entity of ``POST /api/memory/entities:query`` — its version at ``as_of``."""
+    """An entity of ``POST /api/memory/entities:query`` — merged at ``as_of`` from the
+    versions of every snapshot source holding it (MEM-ADR-022): an attribute set by one
+    source is kept when another source's snapshot lacks it; a conflict goes to the
+    kind's ``sourcePriority``, then to the latest writer of that attribute."""
 
     kind: str
     key: str
@@ -267,6 +286,9 @@ class EntityItem(_Forward):
     source_path: str | None = None
     valid_from: str | None = None
     valid_to: str | None = None
+    # Every merged source, highest precedence first; ``source``/``scope``/``snapshot_id``/
+    # ``source_path`` above are the first of them.
+    sources: list[EntitySource] = []
 
 
 class EntitiesPage(_Forward):

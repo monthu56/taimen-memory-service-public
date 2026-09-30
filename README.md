@@ -143,6 +143,11 @@ cb observations                  # recent observations + processing statuses
 cb context "deploy issue" --scope project:alpha   # compile a ContextPack (debug)
 cb trace ctx-…                   # why was that context assembled
 cb consolidate                   # redrive unprocessed observations (idempotent)
+cb merge-entities                # re-merge entity nodes from all snapshot sources (MEM-ADR-022)
+cb redrive-legacy --writer-scope workspace:w1 --dry-run   # list pre-writer-visibility
+                                 # observations with source.system — check it first
+cb redrive-legacy --writer-scope workspace:w1   # redrive them (or --unrestricted /
+                                 # --namespace-level); audited, MEM-ADR-019
 ```
 
 (`platform-memory-serve` runs the HTTP service; `cb`/`platform-memory-*` aliases are equivalent.)
@@ -179,7 +184,8 @@ pack applies only in namespaces where it is enabled. `POST /api/memory/reconcile
 takes the pack's snapshot document as is (`pack, source, scope, snapshotId,
 observedAt, entities, relations`) and reconciles it against the same `(source, scope)`
 (opens new, supersedes changed incl. provenance, closes vanished; nothing is deleted;
-idempotent by `snapshotId`; relations to entities not yet present are kept pending
+a repeat of the last accepted `snapshotId` is a no-op `duplicate`, an earlier one
+coming back after another (A → B → A) is applied anew; relations to entities not yet present are kept pending
 and linked when the target arrives; the answer lists the `{kind, key}` of opened, changed
 and closed nodes in `changes`, at most `CB_RECONCILE_CHANGES_LIMIT` (1000) per list,
 with `truncated`; `dryRun: true` returns the plan without writing, `stateToken` +
@@ -191,7 +197,17 @@ candidates (semantic ones too) and the entities each step reaches by attributes 
 `in`, `prefix` by dot segments, `lte`/`gte` for numbers and ISO dates, `exists`). A pack
 kind with `searchable: {fields}` has its entities embedded (title + those attributes) on
 reconcile (not on `dryRun`) and reindexed on `PUT …/kinds`, so semantic anchors find
-them by meaning. New tables: `CB_DOMAIN_PACKS_TABLE` (+`_tenant`),
+them by meaning. An entity written by several snapshot sources is **merged**, not
+overwritten (MEM-ADR-022): an attribute given by one source survives another source's
+snapshot that lacks it, a conflict of one attribute goes to the kind's `sourcePriority`
+(glob patterns on `source`), then to the source that set that attribute last; `required`
+of a strict kind is checked on the merge, not on each snapshot. The graph node and the
+entity search row merge only versions with the same scopes, so a merge never widens
+visibility. Give a kind fed by an accounting system and a CRM an explicit priority
+(e.g. `legal_entity`: `"sourcePriority": ["erp:*"]`) — otherwise a CRM snapshot with a
+PII-masked name of a sole proprietor, observed later, wins the name. After upgrading run
+`cb merge-entities` once to re-merge existing nodes (otherwise the first `PUT …/kinds`
+of each namespace re-merges it synchronously). New tables: `CB_DOMAIN_PACKS_TABLE` (+`_tenant`),
 `CB_NAMESPACE_SETTINGS_TABLE`, `CB_SNAPSHOTS_TABLE` (+`_items`, `_state`),
 `CB_ENTITY_EMBEDDINGS_TABLE` (entity embeddings of `searchable` kinds).
 
@@ -214,6 +230,8 @@ Disabled by default. To enable:
 service port directly — put `/console` behind a reverse proxy / network policy
 that authenticates the administrator (see `deploy/RUNBOOK.md`). One instance
 serves one customer; namespaces separate that customer's knowledge bases.
+Article import writes as a caller without workspaces (MEM-ADR-019): it never
+overwrites an object scoped to a workspace or principal.
 
 ## Public demo showcase (ADR-009)
 
@@ -257,6 +275,15 @@ platform-memory-mcp              # stdio (local) or streamable HTTP (shared, api
 
 Tools: `query_graph`, `get_node`, `get_neighbors`, `get_community`, `shortest_path`,
 `build_context`, `remember_observation`.
+
+The MCP server is a service surface: it is authorized by the static service key
+(`CB_SERVER_API_KEY`) or runs locally over stdio, and sees the whole knowledge base,
+like the static key on the HTTP API. An agent acting for an end user passes
+`allowed_scopes` (list of `"type:id"`) to any tool to narrow visibility (MEM-ADR-019/021):
+objects outside it are neither returned nor overwritten. End users should use the HTTP
+API with an IAM token. Over streamable HTTP without an api-key the server binds only to a
+loopback address (`127.0.0.1`, `::1`, `localhost`); any other `--host` without
+`CB_SERVER_API_KEY`/`--api-key` refuses to start.
 
 ## Deployment
 

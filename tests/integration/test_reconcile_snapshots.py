@@ -19,22 +19,26 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from platform_memory.context.typed import compile_typed_context
+from platform_memory.core import db as dbmod
 from platform_memory.core.db import agtype
 from platform_memory.core.kinds import UnknownRelationError
 from platform_memory.domain.reconcile import (
     SnapshotError,
     SnapshotLedger,
     SnapshotStateMismatch,
+    StaleSnapshotError,
     reconcile,
 )
 from platform_memory.domain.registry import open_registry
 from platform_memory.graph import store as store_mod
+from platform_memory.observations.store import SchemaMigrationBusy
 
 pytestmark = pytest.mark.integration
 
@@ -824,6 +828,272 @@ class TestReconcileState:
         limited = settings.model_copy(update={"reconcile_changes_limit": 1})
         cut = _run(limited, conn, _next(mirror, "mirror@2", "2026-09-26T08:00:00Z"), dry_run=True)
         assert len(cut["conflicts"]["items"]) == 1 and cut["conflicts"]["truncated"] is True
+
+
+PART_OF = "control-plane:src/control_plane/api/v1/runs.py"
+
+
+def _part_of(facts, **kw) -> list[dict]:
+    return facts.facts(subject=PART_OF, predicate="part_of", namespaces=[NS], **kw)
+
+
+class TestRepeatedContent:
+    """Амендмент MEM-ADR-020 2026-09-30: дубликат — только повтор последнего принятого
+    снимка пары. Коннекторы делают ``snapshotId`` хэшем содержимого, поэтому возврат к
+    прежнему содержимому (A → B → A) приходит прежним id и должен примениться."""
+
+    def _b(self, cp: dict) -> dict:
+        """Снимок B: у эндпоинта другое название, связи part_of файла runs.py нет."""
+        b = _next(cp, "control-plane@b", "2026-09-24T08:00:00Z")
+        next(e for e in b["entities"] if e["key"] == CHECKPOINTS)["title"] = "другое"
+        b["relations"] = [
+            r
+            for r in b["relations"]
+            if not (r["relation"] == "part_of" and r["from"]["key"] == PART_OF)
+        ]
+        return b
+
+    def test_a_b_a_applies_third_snapshot(self, stores, settings, registry, cp):
+        conn, graph, facts, _, _ = stores
+        _run(settings, conn, cp)
+        title = graph.get_node(CHECKPOINTS, namespaces=[NS])["props"].get("title")
+        second = _run(settings, conn, self._b(cp))
+        assert _part_of(facts) == []
+
+        back = _next(cp, cp["snapshotId"], "2026-09-25T08:00:00Z")  # тот же id — хэш A
+        third = _run(settings, conn, back)
+        assert third["duplicate"] is False
+        assert third["changes"]["changed"] == [{"kind": "endpoint", "key": CHECKPOINTS}]
+        assert third["relations"]["opened"] == 1
+        assert third["stateToken"] != second["stateToken"]
+        node = graph.get_node(CHECKPOINTS, namespaces=[NS])
+        assert node["props"].get("title") == title
+
+        # Ребро открыто заново под своим fact_id: не совпадает с закрытым снимком B.
+        (open_edge,) = _part_of(facts)
+        history = _part_of(facts, include_closed=True)
+        assert len(history) == 2
+        assert len({f["fact_id"] for f in history}) == 2
+        closed = next(f for f in history if f["fact_id"] != open_edge["fact_id"])
+        assert closed["valid_to"] == "2026-09-24T08:00:00Z"
+        assert open_edge["valid_from"] == "2026-09-25T08:00:00Z"
+
+        # Версии в журнале — три: A, B, снова A (id версий не совпадают).
+        ledger = SnapshotLedger(conn, settings.snapshots_table)
+        versions = ledger.entity_versions([NS], [CHECKPOINTS])[(NS, "endpoint", CHECKPOINTS)]
+        assert [v["snapshot_id"] for v in versions] == [
+            cp["snapshotId"],
+            "control-plane@b",
+            cp["snapshotId"],
+        ]
+        assert len({v["version_id"] for v in versions}) == 3
+        assert versions[-1]["valid_to"] is None
+
+        # Повтор последнего принятого — по-прежнему дубликат со счётчиками третьего.
+        again = _run(settings, conn, back)
+        assert again["duplicate"] is True
+        assert again["entities"] == third["entities"]
+        assert {k: again["changes"][k] for k in EMPTY} == EMPTY
+        assert len(_part_of(facts, include_closed=True)) == 2
+
+    def test_a_b_a_b_and_replay_of_older(self, stores, settings, registry, cp):
+        conn, _, facts, _, _ = stores
+        _run(settings, conn, cp)
+        b = self._b(cp)
+        _run(settings, conn, b)
+        _run(settings, conn, _next(cp, cp["snapshotId"], "2026-09-25T08:00:00Z"))
+        # B снова — тоже новое применение (второе для id B).
+        b2 = _run(settings, conn, _next(b, b["snapshotId"], "2026-09-26T08:00:00Z"))
+        assert b2["duplicate"] is False
+        assert b2["relations"]["closed"] == 1
+        assert _part_of(facts) == []
+        # Запоздалый повтор B со старым временем — старше принятого, а не дубликат.
+        a3 = _run(settings, conn, _next(cp, cp["snapshotId"], "2026-09-27T08:00:00Z"))
+        assert a3["duplicate"] is False
+        with pytest.raises(StaleSnapshotError):
+            _run(settings, conn, b)
+        # Три применения A — три разных ребра part_of, открыто последнее.
+        history = _part_of(facts, include_closed=True)
+        assert len({f["fact_id"] for f in history}) == 3
+        assert len(_part_of(facts)) == 1
+
+    def test_dry_run_of_earlier_snapshot_plans_changes(self, stores, settings, registry, cp):
+        conn, graph, _, _, _ = stores
+        _run(settings, conn, cp)
+        _run(settings, conn, self._b(cp))
+        rows, size = _ledger_rows(conn, settings), _graph_size(graph)
+        back = _next(cp, cp["snapshotId"], "2026-09-25T08:00:00Z")
+        plan = _run(settings, conn, back, dry_run=True)
+        assert plan["duplicate"] is False
+        assert plan["changes"]["changed"] == [{"kind": "endpoint", "key": CHECKPOINTS}]
+        assert _ledger_rows(conn, settings) == rows and _graph_size(graph) == size
+        applied = _run(settings, conn, back, expected_state=plan["stateToken"])
+        assert _plan(applied) == _plan(plan)
+
+    def test_pending_relation_reopened_by_earlier_snapshot_resolves(
+        self, stores, settings, registry, cp, web
+    ):
+        """Отложенная связь, открытая повторным применением, при разрешении получает
+        fact_id своего применения (номер хранится в журнале версий)."""
+        conn, _, facts, _, _ = stores
+        _run(settings, conn, web)
+        b = _next(web, "platform-web@b", "2026-09-24T08:00:00Z")
+        b["relations"] = [r for r in b["relations"] if r["from"]["key"] != UI_CALL]
+        _run(settings, conn, b)
+        again = _run(settings, conn, _next(web, web["snapshotId"], "2026-09-25T08:00:00Z"))
+        assert again["duplicate"] is False and again["relations"]["pending"] == 3
+        r_cp = _run(settings, conn, cp)
+        assert r_cp["relations"]["resolved"] == 3
+        (call,) = facts.facts(subject=UI_CALL, predicate="calls", namespaces=[NS])
+        assert call["valid_from"] == "2026-09-25T08:00:00Z"
+        with conn.cursor() as cur:
+            cur.execute(
+                f'SELECT graph_ref, opened_apply FROM public."{settings.snapshots_table}_items" '
+                "WHERE item_type='relation' AND kind='calls' AND ref_from = %s "
+                "AND valid_to IS NULL",
+                (f"ui_call\x1f{UI_CALL}",),
+            )
+            ((graph_ref, opened_apply),) = cur.fetchall()
+        assert (graph_ref, opened_apply) == (call["fact_id"], 2)
+
+    def test_parallel_replays_of_earlier_snapshot_apply_once(self, stores, settings, registry, cp):
+        """Два одновременных возврата к A после B: сверки сериализуются локом, вторая
+        видит первую последним принятым снимком — дубликат."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        conn, _, facts, _, _ = stores
+        _run(settings, conn, cp)
+        _run(settings, conn, self._b(cp))
+        back = _next(cp, cp["snapshotId"], "2026-09-25T08:00:00Z")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            done = list(
+                pool.map(
+                    lambda _: reconcile(settings, snapshot=copy.deepcopy(back), namespace=NS),
+                    range(2),
+                )
+            )
+        assert sorted(r["duplicate"] for r in done) == [False, True]
+        assert len(_part_of(facts)) == 1
+
+    def test_pair_without_state_uses_latest_received(self, stores, settings, registry, cp):
+        """Пары, принятые до K004, не имеют строки состояния: последний принятый — самый
+        поздний по времени приёма."""
+        conn = stores[0]
+        _run(settings, conn, cp)
+        b = self._b(cp)
+        _run(settings, conn, b)
+        with conn.cursor() as cur:
+            cur.execute(f'DELETE FROM public."{settings.snapshots_table}_state"')
+        assert _run(settings, conn, b)["duplicate"] is True
+        back = _run(settings, conn, _next(cp, cp["snapshotId"], "2026-09-25T08:00:00Z"))
+        assert back["duplicate"] is False
+
+    def test_legacy_snapshots_table_is_migrated(self, stores, settings, registry, cp):
+        """Журнал снимков с PK по snapshot_id (до амендмента) получает apply_no без потери
+        строк; миграция идемпотентна."""
+        conn = stores[0]
+        _run(settings, conn, cp)
+        t = f'public."{settings.snapshots_table}"'
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER TABLE {t} DROP CONSTRAINT {settings.snapshots_table}_pkey")
+            cur.execute(f"ALTER TABLE {t} DROP COLUMN apply_no")
+            cur.execute(f"ALTER TABLE {t} ADD PRIMARY KEY (namespace, source, scope, snapshot_id)")
+        ledger = SnapshotLedger(conn, settings.snapshots_table)
+        for _ in range(2):
+            ledger.ensure_schema()
+            with conn.cursor() as cur:
+                assert "apply_no" in ledger._snaps_pk_columns(cur)
+                cur.execute(f"SELECT snapshot_id, apply_no FROM {t}")
+                assert cur.fetchall() == [(cp["snapshotId"], 1)]
+        assert _run(settings, conn, cp)["duplicate"] is True
+        _run(settings, conn, self._b(cp))
+        back = _run(settings, conn, _next(cp, cp["snapshotId"], "2026-09-25T08:00:00Z"))
+        assert back["duplicate"] is False
+
+    def test_reader_not_blocked_by_ensure_schema_during_long_reconcile(
+        self, stores, settings, registry, cp
+    ):
+        """Долгая сверка держит журнал версий; сверка другого namespace зовёт
+        ensure_schema — на мигрированной схеме он не ставит ALTER (ACCESS EXCLUSIVE) в
+        очередь, и читатели журнала не ждут."""
+        _run(settings, stores[0], cp)
+        items = f'public."{settings.snapshots_table}_items"'
+        long_tx = dbmod.connect(settings, autocommit=False)
+        other = dbmod.connect(settings, autocommit=True)
+        reader = dbmod.connect(settings, autocommit=True)
+        worker = threading.Thread(
+            target=SnapshotLedger(other, settings.snapshots_table).ensure_schema, daemon=True
+        )
+        try:
+            with long_tx.cursor() as cur:  # лок пишущей сверки до конца её транзакции
+                cur.execute(f"LOCK TABLE {items} IN ROW EXCLUSIVE MODE")
+            worker.start()
+            worker.join(1.0)  # ensure_schema успел дойти до DDL (или закончить)
+            with reader.cursor() as cur:
+                cur.execute(
+                    "SELECT mode FROM pg_locks WHERE relation = to_regclass(%s) AND NOT granted",
+                    (items,),
+                )
+                assert "AccessExclusiveLock" not in {m for (m,) in cur.fetchall()}
+                cur.execute("SET lock_timeout = '2s'")
+                cur.execute(f"SELECT count(*) FROM {items}")
+                assert cur.fetchone()[0] > 0
+        finally:
+            long_tx.rollback()
+            if worker.ident is not None:
+                worker.join(10)
+            for c in (long_tx, other, reader):
+                c.close()
+
+    def test_legacy_migration_waits_for_lock_boundedly(self, stores, settings, registry, cp):
+        """Миграция старого журнала за долгой сверкой не держит очередь читателей: ждёт
+        лок не дольше lock_timeout, после попыток — SchemaMigrationBusy (HTTP 503) без
+        половины миграции; когда сверка закончилась — мигрирует."""
+        conn = stores[0]
+        _run(settings, conn, cp)
+        t = f'public."{settings.snapshots_table}"'
+        items = f'public."{settings.snapshots_table}_items"'
+        with conn.cursor() as cur:
+            cur.execute(f"ALTER TABLE {t} DROP CONSTRAINT {settings.snapshots_table}_pkey")
+            cur.execute(f"ALTER TABLE {t} DROP COLUMN apply_no")
+            cur.execute(f"ALTER TABLE {t} ADD PRIMARY KEY (namespace, source, scope, snapshot_id)")
+            cur.execute(f"ALTER TABLE {items} DROP COLUMN opened_apply")
+        ledger = SnapshotLedger(conn, settings.snapshots_table)
+        ledger.MIGRATION_LOCK_TIMEOUT_MS = 100
+        ledger.MIGRATION_ATTEMPTS = 3
+        ledger.MIGRATION_RETRY_PAUSE = 0.05
+        long_tx = dbmod.connect(settings, autocommit=False)
+        try:
+            with long_tx.cursor() as cur:
+                cur.execute(f"LOCK TABLE {items} IN ROW EXCLUSIVE MODE")
+            started = time.monotonic()
+            with pytest.raises(SchemaMigrationBusy):
+                ledger.ensure_schema()
+            assert time.monotonic() - started < 5
+            assert not ledger._apply_no_migrated()
+            with conn.cursor() as cur:  # журнал снимков не мигрирован наполовину
+                assert "apply_no" not in ledger._snaps_pk_columns(cur)
+        finally:
+            long_tx.rollback()
+            long_tx.close()
+        ledger.ensure_schema()
+        assert ledger._apply_no_migrated()
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT apply_no FROM {t}")
+            assert {r[0] for r in cur.fetchall()} == {1}
+            cur.execute(f"SELECT DISTINCT opened_apply FROM {items}")
+            assert {r[0] for r in cur.fetchall()} == {1}
+
+    def test_migrated_schema_runs_no_ddl(self, stores, settings, registry, cp, monkeypatch):
+        """На мигрированной схеме ensure_schema миграцию не зовёт (проверка — каталог)."""
+        _run(settings, stores[0], cp)
+        ledger = SnapshotLedger(stores[0], settings.snapshots_table)
+
+        def boom() -> None:
+            raise AssertionError("миграция на мигрированной схеме")
+
+        monkeypatch.setattr(ledger, "_migrate_apply_no", boom)
+        ledger.ensure_schema()
 
 
 class TestHttpEndToEnd:
